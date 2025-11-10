@@ -1,0 +1,15 @@
+Traceback (most recent call last):
+  File "C:\story-generator\app.py", line 41, in <module>
+    db.create_all()
+    ~~~~~~~~~~~~~^^
+  File "C:\story-generator\venv\Lib\site-packages\flask_sqlalchemy\extension.py", line 900, in create_all
+    self._call_for_binds(bind_key, "create_all")
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\story-generator\venv\Lib\site-packages\flask_sqlalchemy\extension.py", line 871, in _call_for_binds
+    engine = self.engines[key]
+             ^^^^^^^^^^^^
+  File "C:\story-generator\venv\Lib\site-packages\flask_sqlalchemy\extension.py", line 690, in engines
+    raise RuntimeError(
+    ...<3 lines>...
+    )
+RuntimeError: The current Flask app is not registered with this 'SQLAlchemy' instance. Did you forget to call 'init_app', or did you create multiple 'SQLAlchemy' instances?
