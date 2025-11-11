@@ -57,6 +57,8 @@
         #modal-container{ backdrop-filter: blur(3px) }
         #error-modal, #success-modal{ width:520px }
         .progress-box{ display:flex; align-items:center; gap:.6rem; padding:.5rem .75rem; background:rgba(0,0,0,0.25); border-radius:8px; color:var(--muted); border:1px solid rgba(0,255,136,0.04); }
+    /* Keep important action buttons visible on long pages */
+    .control-footer{ position:sticky; bottom:1rem; display:flex; gap:.6rem; align-items:center; background:transparent; padding-top:.5rem; z-index:20 }
     </style>
 </head>
 <body class="bg-gray-900 text-green-400 min-h-screen">
@@ -104,12 +106,11 @@
                                 <option value="pencil sketch">Detailed Pencil Sketch</option>
                                 <option value="voxel art">Voxel Art</option>
                             </select>
-                            <div style="display:flex; gap:.6rem; align-items:center">
+                            <div class="control-footer">
                                 <button id="start-btn" class="terminal-button" onclick="handleInitialGeneration()">INITIATE STORY</button>
                                 <button id="generate-from-idea-btn" class="terminal-button-secondary" title="Generate an image directly from your idea without using the LLM">IMAGE FROM IDEA</button>
                             </div>
-                            <div style="display:flex; align-items:center; gap:.6rem; margin-top:.5rem">
-                                <div style="flex:1"></div>
+                            <div class="control-footer" style="justify-content:flex-end; margin-top:.5rem">
                                 <button id="continue-btn" class="terminal-button mt-2 hidden" onclick="handleStoryGeneration()">CONTINUE</button>
                             </div>
                         </div>
