@@ -39,13 +39,21 @@ class Config:
 
     # IMAGE PROVIDER configuration
     # 'google' = use Google Imagen (requires billing), 'free' = picsum placeholder, 'alternate' = forward to ALTERNATE_IMAGE_API_URL
-    # Default image provider: use the free Picsum provider by default for
-    # local development unless overridden by the IMAGE_PROVIDER env var.
-    # If you want to use Google Imagen, set IMAGE_PROVIDER=google and ensure
-    # GEMINI_API_KEY is set and billing is enabled for your Google Cloud project.
+    # Default image provider: prefer an explicit IMAGE_PROVIDER env var. If not
+    # provided, fall back to stability when a STABILITY_API_KEY exists, else use 'free'.
     _has_gemini = bool(GEMINI_API_KEY)
-    IMAGE_PROVIDER = os.environ.get('IMAGE_PROVIDER') or 'free'
+    _env_image_provider = os.environ.get('IMAGE_PROVIDER')
     ALTERNATE_IMAGE_API_URL = os.environ.get('ALTERNATE_IMAGE_API_URL') or None
+    # Prefer explicit env var; otherwise prefer stability if key present; otherwise 'free'
+    if _env_image_provider and _env_image_provider.strip() != '':
+        IMAGE_PROVIDER = _env_image_provider
+    else:
+        # Read STABILITY key from env to decide default provider when not set
+        _stability_key = os.environ.get('STABILITY_API_KEY')
+        if _stability_key:
+            IMAGE_PROVIDER = 'stability'
+        else:
+            IMAGE_PROVIDER = 'free'
 
     # --- Stability / Stable Diffusion CONFIG ---
     # Add support for cloud Stability.ai or a local AUTOMATIC1111 server.

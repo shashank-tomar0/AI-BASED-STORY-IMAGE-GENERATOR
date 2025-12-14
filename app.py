@@ -1,7 +1,7 @@
 # app.py
 
 import json
-from flask import Flask, render_template
+from flask import Flask, render_template, jsonify
 
 from config import Config
 from auth import auth_bp
@@ -28,6 +28,15 @@ def create_app(config_class=Config):
     def index():
         return render_template('index.html')
 
+    # Optional lightweight compatibility endpoint: some browser extensions
+    # or injected scripts attempt to fetch /prompts.json. Return an empty
+    # JSON object so those requests don't generate console errors in the
+    # user's browser. This keeps the UI clean while not affecting app
+    # behavior.
+    @app.route('/prompts.json')
+    def prompts_json():
+        return jsonify({}), 200
+
     return app
 
 # --- MAIN EXECUTION ---
@@ -36,4 +45,7 @@ if __name__ == '__main__':
     # The debug flag must be False in production
     app = create_app()
     # Run the dev server
-    app.run(debug=True, port=5000)
+    # Disable the auto-reloader when we start the server from scripts so
+    # the background process doesn't spawn child processes which can make
+    # status probes miss the real server. Safe for local dev.
+    app.run(debug=True, port=5000, use_reloader=False)

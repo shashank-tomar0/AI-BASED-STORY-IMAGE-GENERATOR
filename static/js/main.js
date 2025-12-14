@@ -418,7 +418,15 @@ async function generateStoryData(prompt, artStyle) {
         body: JSON.stringify({ payload: aiPayload })
     });
 
-    // The backend returns the full Gemini API response body
+    // Prefer a server-provided normalized object when available. This
+    // avoids brittle client-side parsing when upstream LLMs wrap JSON in
+    // markdown/code fences or add commentary.
+    if (response?.normalized_candidate) {
+        return response.normalized_candidate;
+    }
+
+    // The backend may still return the older Gemini-shaped response; fall
+    // back to parsing the candidates parts as before.
     const jsonString = response?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!jsonString) {
         throw new Error("LLM returned an empty or invalid content part.");
@@ -538,9 +546,27 @@ function downloadImage(sceneId) {
 }
 
 function renderSummary() {
-    summaryList.innerHTML = state.summaryBullets
-        .map(point => `<li class="text-green-300 before:content-['>'] before:text-green-500 before:mr-2">${point}</li>`)
+    // Render full narratives (most recent first) followed by concise summary bullets
+    const narrativesHtml = (Array.isArray(state.storyHistory) ? state.storyHistory.slice().reverse() : [])
+        .map(n => `<div class="text-sm text-green-400 mb-2">${escapeHtml(n)}</div>`)
         .join('');
+
+    const bulletsHtml = state.summaryBullets
+        .map(point => `<li class="text-green-300 before:content-['>'] before:text-green-500 before:mr-2">${escapeHtml(point)}</li>`)
+        .join('');
+
+    summaryList.innerHTML = `${narrativesHtml}<ul style="list-style:none; padding-left:0;">${bulletsHtml}</ul>`;
+}
+
+// Small helper to escape HTML when injecting text into the DOM
+function escapeHtml(str){
+    if(!str && str!==0) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }
 
 function renderStoryControls() {
@@ -623,14 +649,20 @@ async function handleStoryGeneration(prompt = 'Continue the story.') {
             try { genBtn.focus(); } catch(e) {}
         }
 
-        // AUTO-GENERATE: For a faster, single-click UX, automatically trigger
-        // image generation immediately after the LLM produces the visual prompt.
-        // This mirrors the previous behavior where a single "INITIATE STORY"
-        // created both the narrative and its image. We add a short timeout to
-        // allow the staging UI to render and for users to briefly see the
-        // generated narrative before image generation starts.
-        // If you prefer manual review, comment out the next line.
-        setTimeout(() => { handleImageGeneration(); }, 250);
+        // AUTO-GENERATE: Controlled by a localStorage flag so users can choose
+        // whether images should be generated automatically after the LLM
+        // produces the visual prompt. Default is OFF for manual review.
+        try {
+            const autoGen = localStorage.getItem('AUTO_GENERATE_IMAGE') === 'true';
+            if (autoGen) {
+                // Short delay to allow the staging UI to render so the user can
+                // briefly view the narrative before the image job starts.
+                setTimeout(() => { handleImageGeneration(); }, 250);
+            }
+        } catch (e) {
+            // If localStorage isn't available or an error occurs, do not auto-generate.
+            console.debug('AUTO_GENERATE_IMAGE check failed, skipping auto-generate:', e);
+        }
 
     } catch (error) {
         showModal('error-modal', `An error occurred during narrative generation: ${error.message}`);

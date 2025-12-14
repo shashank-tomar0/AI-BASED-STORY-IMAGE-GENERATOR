@@ -5,11 +5,76 @@ import json
 import base64
 import hashlib
 import time
+import os
 from flask import Blueprint, request, jsonify, current_app
 from auth import token_required
 
 # Create a Blueprint for AI routes
 ai_bp = Blueprint('ai', __name__, url_prefix='/api/ai')
+
+
+def _save_image_b64(b64, prompt_text=None):
+    """Save base64 image bytes to static/uploads and return a relative URL.
+    Returns None on failure or the relative url like '/static/uploads/abc.png'.
+    """
+    try:
+        if not b64:
+            return None
+        uploads_dir = os.path.join(current_app.static_folder, 'uploads')
+        os.makedirs(uploads_dir, exist_ok=True)
+        # Use a stable filename derived from the prompt when available
+        seed = hashlib.sha1((prompt_text or '').encode('utf-8')).hexdigest()[:12]
+        filename = f"img_{seed}.png"
+        path = os.path.join(uploads_dir, filename)
+        img_bytes = base64.b64decode(b64)
+        with open(path, 'wb') as f:
+            f.write(img_bytes)
+        return f"/static/uploads/{filename}"
+    except Exception:
+        # If saving fails, don't block the response — just return None
+        return None
+
+
+def _synthesize_narrative(prompt_text, paragraphs=3):
+    """Create a deterministic, multi-paragraph narrative from the prompt_text.
+    This is a lightweight local fallback used when a real LLM is not
+    available. It is deterministic (based on the prompt) so tests remain
+    reproducible.
+    """
+    try:
+        if not prompt_text:
+            prompt_text = 'A quiet village at dusk.'
+        # Use a hash of the prompt to pick deterministic words
+        h = hashlib.sha1(prompt_text.encode('utf-8')).hexdigest()
+        # small selection pools
+        moods = ['gently', 'ominously', 'brightly', 'softly', 'curiously']
+        settings = ['a coastal town', 'an overgrown forest', 'a bustling market', 'an abandoned manor', 'a hidden valley']
+        characters = ['an old storyteller', 'a curious child', 'a weary traveler', 'a lonely artist', 'a clever fox']
+        events = ['finds an unexpected map', 'uncovers a faded photograph', 'hears a distant melody', 'chases a flicker of light', 'stumbles on a secret door']
+
+        def pick(pool, idx):
+            return pool[int(h[idx:idx+6], 16) % len(pool)]
+
+        mood = pick(moods, 0)
+        setting = pick(settings, 6)
+        character = pick(characters, 12)
+        event = pick(events, 18)
+
+        paras = []
+        intro = f"{prompt_text.strip()}"
+        paras.append(f"{intro} {character.capitalize()} {mood} notices the surroundings of {setting} and {event}.")
+
+        for i in range(1, paragraphs):
+            act = pick(events, 18 + i * 6)
+            detail = pick(settings, 24 + i * 6)
+            paras.append(f"{character.capitalize()} {act} near {detail}. Small, vivid moments unfurl: light, memory, and a choice to be made.")
+
+        # Closing sentence
+        paras.append("In time, the scene settles into a new quiet — one shaped by the small acts that came before.")
+
+        return "\n\n".join(paras)
+    except Exception:
+        return prompt_text
 
 # --- AI ROUTING ENDPOINTS (Protected) ---
 
@@ -20,6 +85,11 @@ def generate_prompt(user_id):
     try:
         data = request.get_json()
         payload = data['payload']
+        # Log start of request for debugging (do not print secrets)
+        try:
+            print(f"GENERATE_PROMPT_START user={user_id} payload_keys={list(payload.keys()) if isinstance(payload, dict) else 'raw'}")
+        except Exception:
+            pass
         # Support a dev mock LLM provider to return deterministic JSON for local testing
         provider = current_app.config.get('LLM_PROVIDER', 'gemini')
 
@@ -47,25 +117,28 @@ def generate_prompt(user_id):
             except Exception:
                 prompt_text = str(payload)
 
-            # Build a simple valid JSON content string expected by the frontend
-            narrative = f"Mock narrative: Continue the story. Context: {prompt_text[:200]}"
-            image_prompt = f"Mock image prompt: {prompt_text[:120]} -- photorealistic cinematic"
-            summary_point = f"Mock summary: {narrative[:80]}"
+            # Build a richer deterministic narrative for local testing so the
+            # frontend receives a believable story even without a real LLM.
+            narrative = _synthesize_narrative(prompt_text, paragraphs=4)
+            image_prompt = f"{prompt_text[:160]} -- photorealistic cinematic"
+            summary_point = narrative.split('\n')[0][:160]
 
+            normalized = {
+                'narrative': narrative,
+                'image_prompt': image_prompt,
+                'summary_point': summary_point
+            }
             mock_body = {
                 'candidates': [
                     {
                         'content': {
                             'parts': [
-                                { 'text': json.dumps({
-                                    'narrative': narrative,
-                                    'image_prompt': image_prompt,
-                                    'summary_point': summary_point
-                                }) }
+                                { 'text': json.dumps(normalized) }
                             ]
                         }
                     }
-                ]
+                ],
+                'normalized_candidate': normalized
             }
             return jsonify(mock_body), 200
 
@@ -94,20 +167,66 @@ def generate_prompt(user_id):
             # free-form text; normalize it so the frontend never sees undefined
             # for the visual prompt.
             resp_json = response.json()
+            # Ensure we always expose a normalized candidate to the client.
+            # Some upstream providers return unexpected shapes (no candidates
+            # or free-form text). We'll try to normalize below and always set
+            # resp_json['normalized_candidate'] so the frontend can rely on it.
+            try:
+                if not isinstance(resp_json, dict):
+                    resp_json = {'raw': resp_json}
+            except Exception:
+                resp_json = {'raw': str(resp_json)}
+            try:
+                print('GENERATE_PROMPT_RAW', str(resp_json)[:1000])
+            except Exception:
+                pass
             try:
                 cand = resp_json.get('candidates', [])
                 if isinstance(cand, list) and len(cand) > 0:
                     content = cand[0].get('content', {})
                     parts = content.get('parts', [])
                     if isinstance(parts, list) and len(parts) > 0:
-                        txt = parts[0].get('text', '')
-                        # If the LLM returned a JSON string, parse it.
+                        txt = parts[0].get('text', '').strip()
+
+                        # --- Sanitize common LLM artifacts ---
+                        # Some LLMs return JSON wrapped in markdown/code fences
+                        # (for example: ```json\n{...}\n```) or include extra
+                        # surrounding text. Try to clean those cases so the
+                        # frontend always receives a plain JSON string.
+                        try:
+                            # Remove a leading code fence line such as "```json" or "```"
+                            if txt.startswith('```'):
+                                # strip the first fence line
+                                nl = txt.find('\n')
+                                if nl != -1:
+                                    txt = txt[nl+1:]
+                                # remove trailing fence if present
+                                if txt.endswith('```'):
+                                    txt = txt[:-3].strip()
+                        except Exception:
+                            pass
+
+                        # If the text contains an embedded JSON object, try to
+                        # extract the first {...} block and parse that. This
+                        # handles cases where the model adds commentary around
+                        # the JSON or returns extra formatting.
                         parsed = None
                         try:
-                            parsed = json.loads(txt)
+                            if '{' in txt and '}' in txt:
+                                start = txt.find('{')
+                                end = txt.rfind('}')
+                                candidate = txt[start:end+1]
+                                parsed = json.loads(candidate)
                         except Exception:
-                            # Fallback: treat the entire text as narrative
-                            parsed = {'narrative': txt}
+                            parsed = None
+
+                        # Final attempt: parse the whole string as JSON, else
+                        # fall back to treating the text as a narrative string.
+                        if parsed is None:
+                            try:
+                                parsed = json.loads(txt)
+                            except Exception:
+                                parsed = {'narrative': txt}
 
                         # Ensure keys exist
                         narrative = parsed.get('narrative') or parsed.get('text') or ''
@@ -135,10 +254,57 @@ def generate_prompt(user_id):
                             'summary_point': summary_point
                         }
                         parts[0]['text'] = json.dumps(normalized)
+                        try:
+                            print('GENERATE_PROMPT_NORMALIZED', json.dumps(normalized)[:1000])
+                        except Exception:
+                            pass
+                        # Also expose a normalized_candidate at top-level to
+                        # simplify frontend parsing and make the API resilient
+                        # to formatting differences from upstream LLMs.
+                        try:
+                            resp_json['normalized_candidate'] = normalized
+                        except Exception:
+                            pass
                         # write back into structure
                         content['parts'] = parts
                         cand[0]['content'] = content
                         resp_json['candidates'] = cand
+                else:
+                    # No candidates found in upstream response; synthesize a
+                    # minimal normalized candidate from the original payload so
+                    # the frontend always receives structured data.
+                    try:
+                        prompt_text = ''
+                        if isinstance(payload, dict):
+                            contents = payload.get('contents') or payload.get('messages')
+                            if contents and isinstance(contents, list) and len(contents) > 0:
+                                first = contents[0]
+                                if isinstance(first, dict):
+                                    parts = first.get('parts') or []
+                                    if parts and isinstance(parts, list) and len(parts) > 0:
+                                        p0 = parts[0]
+                                        if isinstance(p0, dict):
+                                            prompt_text = p0.get('text','')
+                                        else:
+                                            prompt_text = str(p0)
+                                    else:
+                                        prompt_text = first.get('text','') or ''
+                                else:
+                                    prompt_text = str(first)
+                        if not prompt_text:
+                            prompt_text = str(payload)[:200]
+                    except Exception:
+                        prompt_text = str(payload)
+
+                    normalized = {
+                        'narrative': f"Auto-generated narrative from request: {prompt_text[:200]}",
+                        'image_prompt': f"{prompt_text[:160]} -- photorealistic cinematic",
+                        'summary_point': f"Auto summary: {prompt_text[:80]}"
+                    }
+                    try:
+                        resp_json['normalized_candidate'] = normalized
+                    except Exception:
+                        pass
             except Exception:
                 # If any post-processing fails, ignore and return original provider response
                 pass
@@ -178,9 +344,10 @@ def generate_prompt(user_id):
             except Exception:
                 prompt_text = str(payload)
 
-            narrative = f"Mock narrative: Continue the story. Context: {prompt_text[:200]}"
-            image_prompt = f"Mock image prompt: {prompt_text[:120]} -- photorealistic cinematic"
-            summary_point = f"Mock summary: {narrative[:80]}"
+            # Synthesize a richer fallback narrative when upstream LLM fails
+            narrative = _synthesize_narrative(prompt_text, paragraphs=4)
+            image_prompt = f"{prompt_text[:160]} -- photorealistic cinematic"
+            summary_point = narrative.split('\n')[0][:160]
 
             mock_body = {
                 'candidates': [
@@ -197,7 +364,17 @@ def generate_prompt(user_id):
                     }
                 ]
             }
+            # Also expose normalized_candidate for client robustness
+            try:
+                mock_body['normalized_candidate'] = {
+                    'narrative': narrative,
+                    'image_prompt': image_prompt,
+                    'summary_point': summary_point
+                }
+            except Exception:
+                pass
             return jsonify(mock_body), 200
+            
 
     except requests.exceptions.HTTPError as e:
         # Better error handling for external API issues
