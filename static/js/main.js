@@ -813,13 +813,13 @@ document.addEventListener('DOMContentLoaded', () => {
             autoToggle.addEventListener('change', (e) => {
                 try {
                     localStorage.setItem('AUTO_GENERATE_IMAGE', e.target.checked ? 'true' : 'false');
-                    // Provide subtle feedback by updating the provider banner text color briefly
-                    const banner = document.getElementById('provider-banner');
-                    if (banner) {
-                        const orig = banner.style.color;
-                        banner.style.color = e.target.checked ? 'var(--accent)' : 'var(--muted)';
-                        setTimeout(() => { banner.style.color = orig; }, 400);
-                    }
+                    // Move the thumb for the custom toggle UI
+                    const thumb = document.getElementById('auto-gen-thumb');
+                    if (thumb) thumb.style.left = e.target.checked ? '24px' : '4px';
+                    const track = document.getElementById('auto-gen-track');
+                    if (track) track.style.background = e.target.checked ? 'linear-gradient(90deg,var(--accent),#2de6a8)' : 'rgba(255,255,255,0.04)';
+                    // Show a toast for subtle feedback
+                    showToast(`Auto-generate ${e.target.checked ? 'enabled' : 'disabled'}`, 'info');
                 } catch (err) {
                     console.debug('Failed to persist AUTO_GENERATE_IMAGE:', err);
                 }
@@ -833,3 +833,50 @@ document.addEventListener('DOMContentLoaded', () => {
     // Load provider banner info
     loadProviderBanner();
 });
+
+// --- Toast helper ---
+function showToast(message, level = 'info', timeout = 3000) {
+    try {
+        let container = document.getElementById('toast-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'toast-container';
+            container.style.position = 'fixed';
+            container.style.right = '20px';
+            container.style.bottom = '24px';
+            container.style.display = 'flex';
+            container.style.flexDirection = 'column';
+            container.style.gap = '10px';
+            container.style.zIndex = 9999;
+            document.body.appendChild(container);
+        }
+
+        const toast = document.createElement('div');
+        toast.textContent = message;
+    toast.style.padding = '12px 16px';
+    toast.style.borderRadius = '12px';
+    toast.style.minWidth = '220px';
+    toast.style.boxShadow = '0 18px 50px rgba(2,6,10,0.6)';
+    toast.style.color = '#081418';
+    toast.style.fontWeight = '600';
+    toast.style.background = level === 'error' ? 'linear-gradient(90deg,#ff9c9c,#ff6b6b)' : 'linear-gradient(90deg,var(--accent),var(--accent-2))';
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(8px)';
+        toast.style.transition = 'opacity .18s ease, transform .18s ease';
+
+        container.appendChild(toast);
+        // animate in
+        requestAnimationFrame(() => {
+            toast.style.opacity = '1';
+            toast.style.transform = 'translateY(0)';
+        });
+
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateY(8px)';
+            setTimeout(() => { toast.remove(); }, 250);
+        }, timeout);
+    } catch (e) {
+        console.debug('showToast failed', e);
+    }
+}

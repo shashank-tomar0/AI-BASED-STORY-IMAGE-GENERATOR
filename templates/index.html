@@ -5,26 +5,30 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Story Canvas - AI Narrative Generator</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Playfair+Display:wght@400;600;700&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
     
     <style>
         :root{
-            --bg:#0f1724; /* deep navy */
-            --panel:#0b1220; /* panel bg */
-            --accent:#00ff88; /* green neon */
-            --muted:#9ae6b4; /* lighter green */
+            --bg:#061219; /* deep navy */
+            --panel:#081521; /* panel bg */
+            --accent:#D4AF37; /* gold accent for premium feel */
+            --accent-2:#FFD77A;
+            --muted:#cdd6d1; /* soft off-white */
+            --muted-2:#9fb7ad;
             --danger:#ff6b6b;
             --glass: rgba(255,255,255,0.03);
+            --card-glow: 0 18px 60px rgba(212,175,55,0.06);
         }
-        body { font-family: 'Space Mono', monospace; background: linear-gradient(180deg,#071025 0%, #07121b 100%); }
+        body { font-family: 'Inter', 'Space Mono', monospace; background: radial-gradient(1000px 500px at 10% 8%, rgba(212,175,55,0.03), transparent), linear-gradient(180deg,#031017 0%, #04121a 100%); color:var(--muted); }
 
         /* Card / panel base */
         .terminal-card{
-            background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
-            border: 1px solid rgba(0,255,136,0.08);
-            box-shadow: 0 6px 24px rgba(0,0,0,0.6), 0 0 12px rgba(0,255,150,0.03) inset;
-            border-radius: 12px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.06));
+            border: 1px solid rgba(255,255,255,0.02);
+            box-shadow: var(--card-glow), 0 6px 26px rgba(0,0,0,0.6) inset;
+            border-radius: 16px;
             padding: 1.25rem;
+            transition: transform .18s ease, box-shadow .18s ease;
         }
 
         .terminal-input, .terminal-select, textarea.terminal-input{
@@ -34,24 +38,28 @@
 
         .terminal-button{
             display:inline-flex; align-items:center; justify-content:center; gap:.5rem;
-            background: linear-gradient(90deg,var(--accent),#2de6a8); color:#001; font-weight:700; border-radius:10px;
-            padding:.6rem 1rem; border:none; cursor:pointer; box-shadow: 0 8px 24px rgba(0,255,136,0.06);
+            background: linear-gradient(90deg,var(--accent),var(--accent-2)); color:#081418; font-weight:600; border-radius:12px;
+            padding:.7rem 1.05rem; border:none; cursor:pointer; box-shadow: 0 14px 40px rgba(0,0,0,0.6);
+            transform: translateZ(0);
+            letter-spacing: .2px;
         }
 
-        .terminal-button-secondary{ background:transparent; color:var(--muted); border:1px solid rgba(0,255,136,0.06); padding:.5rem .8rem; border-radius:8px }
+    .terminal-button-secondary{ background:transparent; color:var(--muted); border:1px solid rgba(255,255,255,0.03); padding:.5rem .9rem; border-radius:10px }
 
         .loading-spinner { border:4px solid rgba(0,255,136,0.08); border-top:4px solid var(--accent); border-radius:50%; width:20px; height:20px; animation:spin 1s linear infinite }
         @keyframes spin{ to{ transform:rotate(360deg) }}
 
-        .scene-card{ border-radius:10px; overflow:hidden; border:1px solid rgba(0,255,255,0.04); background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(0,0,0,0.12)); box-shadow: 0 6px 18px rgba(0,0,0,0.6) }
+    .scene-card{ border-radius:12px; overflow:hidden; border:1px solid rgba(255,255,255,0.02); background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(0,0,0,0.06)); box-shadow: 0 8px 30px rgba(0,0,0,0.6) }
 
-        .prompt-label{ color:#ffd9a8; font-size:.85rem; display:block; margin-bottom:.4rem }
+    .scene-card:hover{ transform: translateY(-8px); box-shadow: 0 26px 80px rgba(0,0,0,0.6); }
+
+    .prompt-label{ color:var(--accent-2); font-size:.88rem; display:block; margin-bottom:.4rem; font-weight:600 }
 
         /* Layout helpers */
-        .layout-main{ display:grid; grid-template-columns: 360px 1fr; gap:1.25rem; align-items:start }
+    .layout-main{ display:grid; grid-template-columns: 380px 1fr; gap:1.25rem; align-items:start }
         .right-column{ display:flex; flex-direction:column; gap:1rem }
         .summary-card{ height:220px; overflow:auto }
-        .storyboard{ display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap:1rem }
+    .storyboard{ display:grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap:1.25rem }
 
         /* Modals centered */
         #modal-container{ backdrop-filter: blur(3px) }
@@ -59,6 +67,8 @@
         .progress-box{ display:flex; align-items:center; gap:.6rem; padding:.5rem .75rem; background:rgba(0,0,0,0.25); border-radius:8px; color:var(--muted); border:1px solid rgba(0,255,136,0.04); }
     /* Keep important action buttons visible on long pages */
     .control-footer{ position:sticky; bottom:1rem; display:flex; gap:.6rem; align-items:center; background:transparent; padding-top:.5rem; z-index:20 }
+
+    h1.site-title{ font-family: 'Playfair Display', 'Inter', serif; font-size:1.8rem; color:var(--accent); letter-spacing:.6px }
     </style>
 </head>
 <body class="bg-gray-900 text-green-400 min-h-screen">
@@ -69,13 +79,17 @@
                     <h1 style="color:var(--accent); font-size:1.6rem; font-weight:700">&gt; StoryCanvas_v4.0</h1>
                     <div style="color:var(--muted); opacity:.9">AI Narrative & Scene Generator</div>
                 </div>
-                    <div style="display:flex; align-items:center; gap:.8rem">
-                        <div id="provider-banner" style="color:var(--muted); font-size:.85rem; margin-right:1rem"></div>
-                        <!-- Auto-generate image toggle: controlled by localStorage.AUTO_GENERATE_IMAGE -->
-                        <div style="display:flex; align-items:center; gap:.4rem; color:var(--muted); font-size:.85rem;">
-                            <label for="auto-gen-toggle" style="display:flex; align-items:center; gap:.4rem; cursor:pointer">
-                                <input type="checkbox" id="auto-gen-toggle" style="width:16px; height:16px;" />
-                                <span style="font-size:.85rem; color:var(--muted)">Auto-generate image</span>
+                    <div style="display:flex; align-items:center; gap:1rem">
+                        <div id="provider-banner" style="color:var(--muted); font-size:.9rem; margin-right:0.5rem; padding:.35rem .6rem; background:rgba(255,255,255,0.02); border-radius:999px; border:1px solid rgba(255,255,255,0.02)"></div>
+                        <!-- Modern toggle -->
+                        <div style="display:flex; align-items:center; gap:.6rem;">
+                            <label for="auto-gen-toggle" style="display:flex; align-items:center; gap:.6rem; cursor:pointer; user-select:none">
+                                <div style="font-size:.85rem; color:var(--muted);">Auto-generate</div>
+                                <div style="position:relative; width:46px; height:26px;">
+                                    <input type="checkbox" id="auto-gen-toggle" style="opacity:0; width:46px; height:26px; position:absolute; left:0; top:0; cursor:pointer" />
+                                    <div id="auto-gen-track" style="position:absolute; inset:0; background:rgba(255,255,255,0.04); border-radius:999px; border:1px solid rgba(255,255,255,0.03);"></div>
+                                    <div id="auto-gen-thumb" style="position:absolute; left:4px; top:4px; width:18px; height:18px; background:linear-gradient(90deg,var(--accent),#2de6a8); border-radius:50%; box-shadow:0 6px 18px rgba(0,0,0,0.6); transition: left .18s ease;"></div>
+                                </div>
                             </label>
                         </div>
                         <div id="auth-info" class="text-sm"></div>
