@@ -418,6 +418,19 @@ async function generateStoryData(prompt, artStyle) {
         body: JSON.stringify({ payload: aiPayload })
     });
 
+    // Update provider banner with whether a real LLM was used for this
+    // response (backend sets `used_real_llm` true/false when available).
+    try {
+        const banner = document.getElementById('provider-banner');
+        if (banner && typeof response?.used_real_llm !== 'undefined') {
+            // Remove any existing realLLM segment and append the new one
+            banner.textContent = banner.textContent.replace(/\s*\|\s*realLLM:\s*(yes|no)/i, '');
+            banner.textContent = `${banner.textContent} | realLLM:${response.used_real_llm ? 'yes' : 'no'}`;
+        }
+    } catch (e) {
+        console.debug('Failed to update provider-banner with used_real_llm:', e);
+    }
+
     // Prefer a server-provided normalized object when available. This
     // avoids brittle client-side parsing when upstream LLMs wrap JSON in
     // markdown/code fences or add commentary.
