@@ -35,6 +35,87 @@ def _save_image_b64(b64, prompt_text=None):
         return None
 
 
+def _extract_prompt_from_payload(payload):
+    prompt_text = ''
+    try:
+        if isinstance(payload, dict):
+            inst = payload.get('instances') or payload.get('inputs') or payload.get('prompt') or payload.get('inputs')
+            if inst and isinstance(inst, list) and len(inst) > 0:
+                first = inst[0]
+                if isinstance(first, dict):
+                    prompt_text = first.get('prompt') or first.get('text') or ''
+                else:
+                    prompt_text = str(first)
+            elif isinstance(inst, dict):
+                prompt_text = inst.get('prompt') or inst.get('text') or ''
+            elif isinstance(inst, str):
+                prompt_text = inst
+            else:
+                # fallback: try top-level prompt
+                prompt_text = str(payload.get('prompt') or payload)
+    except Exception:
+        prompt_text = str(payload)
+    return (prompt_text or '').strip()
+
+
+def _make_image_cache_key(prompt_text, provider, params=None):
+    if params is None:
+        params = {}
+    try:
+        norm = f"prompt:{prompt_text}|provider:{provider}|params:{json.dumps(params, sort_keys=True)}"
+        return hashlib.sha1(norm.encode('utf-8')).hexdigest()[:16]
+    except Exception:
+        return hashlib.sha1((prompt_text + provider).encode('utf-8')).hexdigest()[:16]
+
+
+def _persist_image_cache(key, base64_list, prompt_text):
+    """Persist images and a metadata JSON for a given cache key."""
+    try:
+        uploads_dir = os.path.join(current_app.static_folder, 'uploads')
+        os.makedirs(uploads_dir, exist_ok=True)
+        meta = {'key': key, 'files': [], 'prompt': prompt_text, 'ts': int(time.time())}
+        for idx, b64 in enumerate(base64_list):
+            filename = f"img_{key}_{idx}.png"
+            path = os.path.join(uploads_dir, filename)
+            with open(path, 'wb') as f:
+                f.write(base64.b64decode(b64))
+            meta['files'].append(filename)
+
+        meta_path = os.path.join(uploads_dir, f'cache_{key}.json')
+        with open(meta_path, 'w', encoding='utf-8') as f:
+            json.dump(meta, f)
+        return True
+    except Exception:
+        return False
+
+
+def _load_image_cache(key, ttl_seconds=86400):
+    """Return a list of base64 strings if cache exists and is valid; otherwise None."""
+    try:
+        uploads_dir = os.path.join(current_app.static_folder, 'uploads')
+        meta_path = os.path.join(uploads_dir, f'cache_{key}.json')
+        if not os.path.exists(meta_path):
+            return None
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            meta = json.load(f)
+        ts = meta.get('ts', 0)
+        if ttl_seconds and (int(time.time()) - ts) > ttl_seconds:
+            # expired
+            return None
+        files = meta.get('files', [])
+        base64_list = []
+        for fname in files:
+            path = os.path.join(uploads_dir, fname)
+            if not os.path.exists(path):
+                return None
+            with open(path, 'rb') as f:
+                b = f.read()
+                base64_list.append(base64.b64encode(b).decode('utf-8'))
+        return base64_list
+    except Exception:
+        return None
+
+
 def _synthesize_narrative(prompt_text, paragraphs=3):
     """Create a deterministic, multi-paragraph narrative from the prompt_text.
     This is a lightweight local fallback used when a real LLM is not
@@ -85,6 +166,7 @@ def generate_prompt(user_id):
     try:
         data = request.get_json()
         payload = data['payload']
+
         # Log start of request for debugging (do not print secrets)
         try:
             print(f"GENERATE_PROMPT_START user={user_id} payload_keys={list(payload.keys()) if isinstance(payload, dict) else 'raw'}")
@@ -415,25 +497,41 @@ def generate_image(user_id):
         provider = current_app.config.get('IMAGE_PROVIDER', 'google')
         alternate_url = current_app.config.get('ALTERNATE_IMAGE_API_URL')
 
+        # Determine prompt and requested sample count for caching
+        prompt_text = _extract_prompt_from_payload(payload)
+        params = {}
+        try:
+            params_obj = payload.get('parameters') if isinstance(payload, dict) else {}
+            if isinstance(params_obj, dict):
+                params['sampleCount'] = params_obj.get('sampleCount') or params_obj.get('samples') or 1
+                params['aspectRatio'] = params_obj.get('aspectRatio')
+        except Exception:
+            params['sampleCount'] = 1
+
+        cache_key = _make_image_cache_key(prompt_text, provider, params)
+        cache_ttl = current_app.config.get('IMAGE_CACHE_TTL_SECONDS', 60 * 60 * 24)
+        # Try to serve from cache first
+        cached = _load_image_cache(cache_key, ttl_seconds=cache_ttl)
+        if cached:
+            preds = [{'bytesBase64Encoded': b} for b in cached]
+            return jsonify({'predictions': preds, 'cached': True}), 200
+
         if provider == 'free':
             # Derive a seed from the prompt text for variety
-            prompt_text = ''
             try:
-                # payload may contain instances[0].prompt or similar
-                if isinstance(payload, dict):
-                    inst = payload.get('instances') or payload.get('inputs')
-                    if inst and isinstance(inst, list) and len(inst) > 0:
-                        first = inst[0]
-                        prompt_text = first.get('prompt') if isinstance(first, dict) else str(first)
+                seed = hashlib.sha1(prompt_text.encode('utf-8')).hexdigest()[:8]
             except Exception:
-                prompt_text = str(payload)
-
-            seed = hashlib.sha1(prompt_text.encode('utf-8')).hexdigest()[:8]
+                seed = hashlib.sha1(str(time.time()).encode('utf-8')).hexdigest()[:8]
             picsum_url = f'https://picsum.photos/seed/{seed}/800/450'
             pic_resp = requests.get(picsum_url)
             if pic_resp.status_code == 200:
                 img_bytes = pic_resp.content
                 b64 = base64.b64encode(img_bytes).decode('utf-8')
+                # persist small picsum fallback to cache
+                try:
+                    _persist_image_cache(cache_key, [b64], prompt_text)
+                except Exception:
+                    pass
                 return jsonify({'predictions': [{'bytesBase64Encoded': b64}]}), 200
             # If picsum fails for some reason, fall through to other handlers
 
@@ -484,6 +582,9 @@ def generate_image(user_id):
                 'samples': 1
             }
             try:
+                # if params requested sampleCount override, use it
+                if params.get('sampleCount'):
+                    body['samples'] = int(params.get('sampleCount') or 1)
                 st_resp = requests.post(stability_url, headers=headers, json=body, timeout=60)
                 st_resp.raise_for_status()
             except requests.exceptions.HTTPError:
@@ -514,6 +615,12 @@ def generate_image(user_id):
 
                 if not b64:
                     return jsonify({'error': 'No image returned by Stability API.'}), 502
+
+                # persist to cache
+                try:
+                    _persist_image_cache(cache_key, [b64], prompt_text)
+                except Exception:
+                    pass
 
                 return jsonify({'predictions': [{'bytesBase64Encoded': b64}]}), 200
             except Exception as e:
@@ -555,6 +662,10 @@ def generate_image(user_id):
                 # AUTOMATIC1111 returns images as base64 strings in j['images']
                 if 'images' in j and isinstance(j['images'], list) and len(j['images']) > 0:
                     b64 = j['images'][0]
+                    try:
+                        _persist_image_cache(cache_key, [b64], prompt_text)
+                    except Exception:
+                        pass
                     return jsonify({'predictions': [{'bytesBase64Encoded': b64}]}), 200
                 return jsonify({'error': 'No images returned from local AUTOMATIC1111.'}), 502
             except Exception as e:
@@ -660,6 +771,37 @@ def generate_image(user_id):
 
             return jsonify({'error': f"Image API Error: {resp_text}"}), response.status_code
 
+        # Attempt to persist returned images if present in response
+        try:
+            j = response.json()
+            # extract base64(s)
+            b64_list = []
+            if isinstance(j, dict):
+                if 'predictions' in j and isinstance(j['predictions'], list):
+                    for p in j['predictions']:
+                        if isinstance(p, dict) and p.get('bytesBase64Encoded'):
+                            b64_list.append(p.get('bytesBase64Encoded'))
+                        elif isinstance(p, str):
+                            b64_list.append(p)
+                # common other shapes
+                if 'artifacts' in j and isinstance(j['artifacts'], list):
+                    for a in j['artifacts']:
+                        if isinstance(a, dict) and a.get('base64'):
+                            b64_list.append(a.get('base64'))
+                if 'images' in j and isinstance(j['images'], list):
+                    for it in j['images']:
+                        if isinstance(it, dict) and it.get('b64'):
+                            b64_list.append(it.get('b64'))
+                        elif isinstance(it, str):
+                            b64_list.append(it)
+            if b64_list:
+                try:
+                    _persist_image_cache(cache_key, b64_list, prompt_text)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         return jsonify(response.json()), 200
         
     except Exception as e:
@@ -676,6 +818,145 @@ def status():
         'use_mock_fallback': cfg.get('USE_MOCK_FALLBACK', False),
         'has_gemini_key': bool(cfg.get('GEMINI_API_KEY'))
     }), 200
+
+
+@ai_bp.route('/cache/invalidate', methods=['POST'])
+@token_required
+def cache_invalidate(user_id):
+    """Invalidate persisted image cache entries.
+
+    Accepts JSON payloads of the forms:
+      { "key": "<cache_key>" }
+      { "prompt": "...", "provider": "...", "params": {...} }
+      { "all": true }
+
+    Returns which files were removed.
+    """
+    try:
+        data = request.get_json() or {}
+        uploads_dir = os.path.join(current_app.static_folder, 'uploads')
+        os.makedirs(uploads_dir, exist_ok=True)
+
+        removed = []
+
+        # Remove everything
+        if data.get('all'):
+            for fname in os.listdir(uploads_dir):
+                if fname.startswith('cache_') or fname.startswith('img_'):
+                    try:
+                        path = os.path.join(uploads_dir, fname)
+                        os.remove(path)
+                        removed.append(fname)
+                    except Exception:
+                        pass
+            return jsonify({'success': True, 'removed': removed}), 200
+
+        # If key supplied, remove cache_{key}.json and referenced files
+        key = data.get('key')
+        if key:
+            meta_path = os.path.join(uploads_dir, f'cache_{key}.json')
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path, 'r', encoding='utf-8') as f:
+                        meta = json.load(f)
+                    for fname in meta.get('files', []):
+                        path = os.path.join(uploads_dir, fname)
+                        if os.path.exists(path):
+                            try:
+                                os.remove(path)
+                                removed.append(fname)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+                try:
+                    os.remove(meta_path)
+                    removed.append(os.path.basename(meta_path))
+                except Exception:
+                    pass
+            # Also attempt to remove any imgs matching the key prefix
+            for fname in os.listdir(uploads_dir):
+                if fname.startswith(f'img_{key}_'):
+                    try:
+                        os.remove(os.path.join(uploads_dir, fname))
+                        removed.append(fname)
+                    except Exception:
+                        pass
+            return jsonify({'success': True, 'removed': removed}), 200
+
+        # If prompt/provider/params provided, compute the cache key and delete
+        prompt = data.get('prompt')
+        provider = data.get('provider', current_app.config.get('IMAGE_PROVIDER', 'google'))
+        params = data.get('params') or {}
+        if prompt:
+            key = _make_image_cache_key(prompt, provider, params)
+            # Recurse into key path removal (reuse above logic)
+            meta_path = os.path.join(uploads_dir, f'cache_{key}.json')
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path, 'r', encoding='utf-8') as f:
+                        meta = json.load(f)
+                    for fname in meta.get('files', []):
+                        path = os.path.join(uploads_dir, fname)
+                        if os.path.exists(path):
+                            try:
+                                os.remove(path)
+                                removed.append(fname)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+                try:
+                    os.remove(meta_path)
+                    removed.append(os.path.basename(meta_path))
+                except Exception:
+                    pass
+            for fname in os.listdir(uploads_dir):
+                if fname.startswith(f'img_{key}_'):
+                    try:
+                        os.remove(os.path.join(uploads_dir, fname))
+                        removed.append(fname)
+                    except Exception:
+                        pass
+            return jsonify({'success': True, 'removed': removed, 'key': key}), 200
+
+        return jsonify({'success': False, 'error': 'No valid cache delete parameters provided.'}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@ai_bp.route('/cache/list', methods=['GET'])
+@token_required
+def cache_list(user_id):
+    """Return a list of cache entries (safe metadata only).
+
+    Each entry includes: key, prompt, ts, files (filenames) and file_urls (relative paths)
+    """
+    try:
+        uploads_dir = os.path.join(current_app.static_folder, 'uploads')
+        os.makedirs(uploads_dir, exist_ok=True)
+        entries = []
+        for fname in os.listdir(uploads_dir):
+            if not fname.startswith('cache_') or not fname.endswith('.json'):
+                continue
+            meta_path = os.path.join(uploads_dir, fname)
+            try:
+                with open(meta_path, 'r', encoding='utf-8') as f:
+                    meta = json.load(f)
+                key = meta.get('key') or fname.replace('cache_', '').replace('.json', '')
+                prompt = meta.get('prompt')
+                ts = meta.get('ts')
+                files = meta.get('files', [])
+                file_urls = [f"/static/uploads/{n}" for n in files]
+                entries.append({'key': key, 'prompt': prompt, 'ts': ts, 'files': files, 'file_urls': file_urls})
+            except Exception:
+                # ignore broken entries
+                continue
+        # sort by ts desc
+        entries.sort(key=lambda e: e.get('ts', 0), reverse=True)
+        return jsonify({'entries': entries}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @ai_bp.route('/generate-main-image', methods=['POST'])

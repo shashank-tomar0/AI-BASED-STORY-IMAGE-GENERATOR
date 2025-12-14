@@ -29,6 +29,7 @@ Important env options (you can set them in the terminal or in `.env`):
 - IMAGE_PROVIDER: `google` (Imagen), `stability` (Stability.ai), `local_auto` (AUTOMATIC1111), or `free` (Picsum placeholder)
 - USE_MOCK_FALLBACK: `False` to force provider errors to surface; `True` to fallback to mock LLM
 - USE_IMAGE_FALLBACK: `False` to let image API errors surface; `True` to return a tiny placeholder
+ - IMAGE_CACHE_TTL_SECONDS: how long (in seconds) generated images are kept in the local disk cache (default: 86400 = 24 hours). Set this to 0 to disable TTL-based expiration.
 
 Run the app (examples):
 - Use real Gemini LLM and Picsum for free images (recommended workflow):
@@ -110,6 +111,16 @@ Create a `.env` file in the project root with the following keys (examples):
 Notes:
 - If you don't have Gemini/Stability keys you can set `LLM_PROVIDER=mock` and `IMAGE_PROVIDER=free`.
 - The app reads `.env` via python-dotenv on startup; restart the server after changing `.env`.
+
+Example `.env` snippet to tune cache TTL (optional):
+
+```env
+# Keep cached images for 24 hours (default)
+IMAGE_CACHE_TTL_SECONDS=86400
+
+# Set to 0 to disable TTL expiry (cached files will remain until manually removed)
+# IMAGE_CACHE_TTL_SECONDS=0
+```
 
 3) Start the server (Windows cmd.exe)
 

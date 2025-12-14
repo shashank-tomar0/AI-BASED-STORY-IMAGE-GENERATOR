@@ -55,6 +55,10 @@ class Config:
         else:
             IMAGE_PROVIDER = 'free'
 
+    # How long (seconds) to keep generated images in the local disk cache.
+    # Default: 24 hours. Configure via environment variable IMAGE_CACHE_TTL_SECONDS.
+    IMAGE_CACHE_TTL_SECONDS = int(os.environ.get('IMAGE_CACHE_TTL_SECONDS', 60 * 60 * 24))
+
     # --- Stability / Stable Diffusion CONFIG ---
     # Add support for cloud Stability.ai or a local AUTOMATIC1111 server.
     # To use Stability.ai (cloud) set IMAGE_PROVIDER=stability and provide

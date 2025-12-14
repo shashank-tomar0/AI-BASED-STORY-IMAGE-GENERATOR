@@ -447,12 +447,12 @@ async function generateStoryData(prompt, artStyle) {
     return JSON.parse(jsonString);
 }
 
-async function generateImage(prompt, artStyle) {
-    // Imagen API Payload
+async function generateImage(prompt, artStyle, count = 1) {
+    // Request `count` images in a single backend call when supported.
     const aiPayload = {
         instances: [{ prompt: `${prompt}, in the style of ${artStyle}` }],
         parameters: { 
-            sampleCount: 1,
+            sampleCount: count,
             aspectRatio: "16:9" 
         }
     };
@@ -463,19 +463,27 @@ async function generateImage(prompt, artStyle) {
         body: JSON.stringify({ payload: aiPayload })
     });
 
-    const base64Data = response?.predictions?.[0]?.bytesBase64Encoded;
+    // Expect an array of predictions; normalize to an array of base64 strings.
+    let base64List = [];
+    try {
+        if (Array.isArray(response?.predictions) && response.predictions.length > 0) {
+            base64List = response.predictions
+                .map(p => p?.bytesBase64Encoded)
+                .filter(Boolean);
+        } else if (response?.predictions?.[0]?.bytesBase64Encoded) {
+            base64List = [response.predictions[0].bytesBase64Encoded];
+        }
+    } catch (e) {
+        console.debug('Failed to normalize image response:', e);
+    }
 
-    if (!base64Data) {
-        // FALLBACK: If the model fails silently (e.g., content filtering or technical error), we use the fallback prompt
-        console.warn("Image model failed to return image data. Generating safe fallback image.");
+    // If no images returned, try a single fallback image request
+    if (!base64List.length) {
+        console.warn("Image model failed to return image data. Attempting fallback image generation.");
         const fallbackPrompt = "A serene, abstract landscape with geometric shapes and neon colors, digital art, 16:9 aspect ratio.";
-        
         const fallbackPayload = {
             instances: [{ prompt: fallbackPrompt }],
-            parameters: { 
-                sampleCount: 1,
-                aspectRatio: "16:9" 
-            }
+            parameters: { sampleCount: 1, aspectRatio: "16:9" }
         };
 
         const fallbackResponse = await fetchWithRetry(`${API_BASE_URL}/ai/generate-image`, {
@@ -486,14 +494,12 @@ async function generateImage(prompt, artStyle) {
 
         const fallbackBase64 = fallbackResponse?.predictions?.[0]?.bytesBase64Encoded;
         if (!fallbackBase64) {
-            throw new Error("Image generation failed twice (main and fallback).");
+            throw new Error("Image generation failed and fallback also failed.");
         }
-        
-        console.warn("Successfully generated fallback image.");
-        return fallbackBase64;
+        return [fallbackBase64];
     }
 
-    return base64Data;
+    return base64List;
 }
 
 // --- SCENE RENDERING ---
@@ -504,7 +510,7 @@ function renderScene(scene) {
             <h3 class="text-xl font-bold text-cyan-400 mb-3">Scene ${scene.id}: ${scene.artStyle}</h3>
             
             <div class="mb-4">
-                <img id="scene-img-${scene.id}" src="${scene.imageUrl}" alt="Scene ${scene.id} Visual" class="w-full rounded-lg shadow-xl border border-cyan-500/50 object-cover aspect-16-9">
+                <img id="scene-img-${scene.id}" src="${scene.imageUrl}" alt="Scene ${scene.id} Visual" class="w-full rounded-lg shadow-xl border border-cyan-500/50" style="height:220px; object-fit:cover;">
             </div>
 
             <p class="text-green-200 mb-2">${scene.narrative}</p>
@@ -690,12 +696,11 @@ async function handleStoryGeneration(prompt = 'Continue the story.') {
 
 async function handleImageGeneration() {
     if (state.isGenerating || !state.currentSceneData) return;
-    setLoading(true, '2/2. Generating image (this may take 10-20 seconds)...');
-    showProgress(2,2,'Generating image...');
-    
+    // We'll generate up to 3 images sequentially and show each as a separate scene
+    setLoading(true, 'Generating up to 3 images (this may take some time)...');
     const customPrompt = promptEditor.value.trim();
     const artStyle = artStyleSelect.value;
-    
+
     if (!customPrompt) {
         showModal('error-modal', 'The Visual Prompt cannot be empty. Please edit it or go back.');
         setLoading(false);
@@ -703,34 +708,50 @@ async function handleImageGeneration() {
     }
 
     try {
-        const base64Data = await generateImage(customPrompt, artStyle);
-        const imageUrl = `data:image/png;base64,${base64Data}`;
-        
-        // --- FINAL SCENE ASSEMBLY ---
-        state.sceneCounter++;
-        const newScene = {
-            id: state.sceneCounter,
-            narrative: state.currentSceneData.narrative,
-            imagePrompt: customPrompt,
-            imageUrl: imageUrl,
-            summaryPoint: state.currentSceneData.summary_point,
-            artStyle: artStyle,
-        };
-        
-        // Update State
-        state.storyHistory.push(newScene.narrative);
-        state.summaryBullets.push(newScene.summaryPoint);
-        state.scenes.unshift(newScene); // Add to the start for a reverse-chronological view
-        state.currentSceneData = null; // Clear staging data
+        const desiredCount = 3; // generate up to 3 images
+        // Request multiple images in one call when the backend supports it
+        const base64List = await generateImage(customPrompt, artStyle, desiredCount);
 
-        // Save and Render
+        if (!Array.isArray(base64List) || base64List.length === 0) {
+            throw new Error('No images returned from provider.');
+        }
+
+        // For each returned image, create a new scene entry
+        for (let i = 0; i < base64List.length; i++) {
+            const imgB64 = base64List[i];
+            // Update progress UI for each image
+            showProgress(i + 1, base64List.length, `Rendering image ${i + 1} of ${base64List.length}...`);
+
+            const imageUrl = `data:image/png;base64,${imgB64}`;
+            state.sceneCounter++;
+            const newScene = {
+                id: state.sceneCounter,
+                narrative: state.currentSceneData.narrative,
+                imagePrompt: customPrompt,
+                imageUrl: imageUrl,
+                summaryPoint: state.currentSceneData.summary_point,
+                artStyle: artStyle,
+            };
+
+            // Update State: push narrative once for each image to preserve chronological history
+            state.storyHistory.push(newScene.narrative);
+            state.summaryBullets.push(newScene.summaryPoint);
+            state.scenes.unshift(newScene);
+
+            // Render incremental scenes so user sees images appear as they arrive
+            renderScene(newScene);
+        }
+
+        // Clear staging data after all images generated
+        state.currentSceneData = null;
+
+        // Save session once (after all images)
         await saveStorySession();
         renderUIFromState();
-        
+
     } catch (error) {
         showModal('error-modal', `Image generation failed. Please revise the Visual Prompt and try again. Error: ${error.message}`);
     } finally {
-        // Reset controls for the next step (story continuation)
         setLoading(false);
         stagingArea.classList.add('hidden');
         storyControls.classList.remove('hidden');
@@ -757,8 +778,8 @@ async function handleGenerateImageFromIdea() {
     showProgress(1,1,'Generating image from idea...');
 
     try {
-        const base64Data = await generateImage(idea, artStyle);
-        const imageUrl = `data:image/png;base64,${base64Data}`;
+    const base64List = await generateImage(idea, artStyle, 1);
+    const imageUrl = `data:image/png;base64,${base64List[0]}`;
 
         // Create a simple narrative for this scene referencing the idea.
         state.sceneCounter++;
@@ -832,6 +853,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // no auto-generate toggle: generation is manual by default
     // Load provider banner info
     loadProviderBanner();
+    // Wire cache admin button
+    const cacheBtn = document.getElementById('cache-btn');
+    if (cacheBtn) cacheBtn.onclick = showCacheModal;
 });
 
 // --- Toast helper ---
@@ -878,5 +902,75 @@ function showToast(message, level = 'info', timeout = 3000) {
         }, timeout);
     } catch (e) {
         console.debug('showToast failed', e);
+    }
+}
+
+// --- Cache Admin UI ---
+function showCacheModal() {
+    const cacheModal = document.getElementById('cache-modal');
+    if (!cacheModal) return;
+    cacheModal.classList.remove('hidden');
+    modalContainer.classList.remove('hidden');
+    loadCacheList();
+}
+
+function hideCacheModal() {
+    const cacheModal = document.getElementById('cache-modal');
+    if (!cacheModal) return;
+    cacheModal.classList.add('hidden');
+    modalContainer.classList.add('hidden');
+}
+
+async function loadCacheList() {
+    try {
+        const resp = await fetchWithRetry(`${API_BASE_URL}/ai/cache/list`, { method: 'GET' });
+        const listDiv = document.getElementById('cache-list');
+        if (!listDiv) return;
+        const entries = resp?.entries || [];
+        if (entries.length === 0) {
+            listDiv.innerHTML = '<div class="text-sm text-green-300">No cache entries found.</div>';
+            return;
+        }
+        const html = entries.map(e => {
+            const ts = e.ts ? new Date(e.ts * 1000).toLocaleString() : 'n/a';
+            const filesHtml = (e.files || []).map(f => `<a class="text-xs text-cyan-200" href="/static/uploads/${f}" target="_blank">${f}</a>`).join('<br>');
+            return `
+                <div class="mb-4 p-3 rounded border border-cyan-800" style="background:rgba(0,0,0,0.35)">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <div class="text-sm text-cyan-100 font-semibold">Key: ${e.key}</div>
+                            <div class="text-xs text-green-300">Prompt: ${escapeHtml(e.prompt || '')}</div>
+                            <div class="text-xs text-green-500">ts: ${ts}</div>
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:.4rem; align-items:flex-end">
+                            <button class="terminal-button-secondary" onclick="invalidateCacheKey('${e.key}')">Delete</button>
+                        </div>
+                    </div>
+                    <div style="margin-top:.6rem" class="text-xs">${filesHtml}</div>
+                </div>
+            `;
+        }).join('');
+        listDiv.innerHTML = html;
+    } catch (err) {
+        showModal('error-modal', `Failed to load cache list: ${err.message}`);
+    }
+}
+
+async function invalidateCacheKey(key) {
+    if (!confirm('Delete cache entry and files for key ' + key + '?')) return;
+    try {
+        const resp = await fetchWithRetry(`${API_BASE_URL}/ai/cache/invalidate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key })
+        });
+        if (resp && resp.success) {
+            showToast('Cache entry removed', 'info');
+            loadCacheList();
+        } else {
+            showModal('error-modal', `Failed to remove cache entry: ${JSON.stringify(resp || {})}`);
+        }
+    } catch (err) {
+        showModal('error-modal', `Failed to remove cache entry: ${err.message}`);
     }
 }
