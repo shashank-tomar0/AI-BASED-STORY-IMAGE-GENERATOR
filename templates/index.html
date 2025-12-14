@@ -71,6 +71,13 @@
                 </div>
                     <div style="display:flex; align-items:center; gap:.8rem">
                         <div id="provider-banner" style="color:var(--muted); font-size:.85rem; margin-right:1rem"></div>
+                        <!-- Auto-generate image toggle: controlled by localStorage.AUTO_GENERATE_IMAGE -->
+                        <div style="display:flex; align-items:center; gap:.4rem; color:var(--muted); font-size:.85rem;">
+                            <label for="auto-gen-toggle" style="display:flex; align-items:center; gap:.4rem; cursor:pointer">
+                                <input type="checkbox" id="auto-gen-toggle" style="width:16px; height:16px;" />
+                                <span style="font-size:.85rem; color:var(--muted)">Auto-generate image</span>
+                            </label>
+                        </div>
                         <div id="auth-info" class="text-sm"></div>
                     </div>
             </div>

@@ -790,6 +790,32 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('login-btn').onclick = handleLogin;
     document.getElementById('register-btn').onclick = handleRegister;
     
+    // Wire up the in-UI AUTO_GENERATE_IMAGE toggle (persists to localStorage)
+    try {
+        const autoToggle = document.getElementById('auto-gen-toggle');
+        if (autoToggle) {
+            // Initialize checked state from localStorage (default false)
+            const val = localStorage.getItem('AUTO_GENERATE_IMAGE') === 'true';
+            autoToggle.checked = !!val;
+            autoToggle.addEventListener('change', (e) => {
+                try {
+                    localStorage.setItem('AUTO_GENERATE_IMAGE', e.target.checked ? 'true' : 'false');
+                    // Provide subtle feedback by updating the provider banner text color briefly
+                    const banner = document.getElementById('provider-banner');
+                    if (banner) {
+                        const orig = banner.style.color;
+                        banner.style.color = e.target.checked ? 'var(--accent)' : 'var(--muted)';
+                        setTimeout(() => { banner.style.color = orig; }, 400);
+                    }
+                } catch (err) {
+                    console.debug('Failed to persist AUTO_GENERATE_IMAGE:', err);
+                }
+            });
+        }
+    } catch (err) {
+        console.debug('AUTO_GENERATE_IMAGE UI wiring failed', err);
+    }
+    
     // no auto-generate toggle: generation is manual by default
     // Load provider banner info
     loadProviderBanner();
