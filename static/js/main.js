@@ -362,12 +362,15 @@ async function loadStorySession() {
 }
 
 function initializeApp() {
+    console.log('🚀 initializeApp() called, token:', state.token ? 'present' : 'missing');
     updateHeader();
     if (state.token) {
+        console.log('  → Hiding auth screen, showing story controls');
         authScreen.classList.add('hidden');
         storyControls.classList.remove('hidden');
         loadStorySession();
     } else {
+        console.log('  → Showing auth screen, hiding story controls');
         authScreen.classList.remove('hidden');
         storyControls.classList.add('hidden');
     }
@@ -375,12 +378,15 @@ function initializeApp() {
 
 // Bridge: update state when Firebase completes auth
 window.addEventListener('firebase-auth-success', (e) => {
+    console.log('🔥 firebase-auth-success event received!', e.detail);
     const info = (e && e.detail) || {};
     state.token = info.token || localStorage.getItem('authToken') || 'firebase-token-' + Date.now();
     state.username = info.username || localStorage.getItem('username') || state.username || 'User';
     state.displayName = info.displayName || localStorage.getItem('displayName') || state.displayName;
     state.avatar = info.avatar || localStorage.getItem('avatar') || state.avatar;
     state.userId = info.userId || localStorage.getItem('userId') || state.userId || 'firebase-user';
+    
+    console.log('  → Updated state:', { token: state.token, username: state.username, displayName: state.displayName });
     
     localStorage.setItem('authToken', state.token);
     localStorage.setItem('username', state.username);
@@ -390,7 +396,11 @@ window.addEventListener('firebase-auth-success', (e) => {
     
     updateHeader();
     initializeApp();
-    showSuccess('✓ Signed in with Google!');
+    // Close any error modals first before showing success
+    hideModal('error-modal');
+    setTimeout(() => {
+        showSuccess('✓ Signed in with Google!');
+    }, 300);
 });
 
 // --- RUN INITIALIZATION ---
@@ -440,15 +450,29 @@ async function saveStorySession() {
 async function generateStoryData(prompt, artStyle) {
     console.log('generateStoryData called with prompt:', prompt);
     
-    const systemPrompt = `You are a creative narrative generator. Your task is to continue the story based on the context provided. The output MUST be a single, valid JSON object.
-        1. 'narrative': A new paragraph continuing the story. Keep it focused on a single scene or moment.
-        2. 'image_prompt': A single, highly detailed, descriptive visual prompt suitable for a text-to-image model (like Midjourney or Imagen) that captures the main action and atmosphere of the 'narrative' paragraph. The style should be included in the prompt, focusing on '${artStyle}'.
-        3. 'summary_point': A single, concise, new bullet point summarizing the key event of the new 'narrative'.`;
+    const systemPrompt = `You are an expert narrative and visual storyteller. Create immersive, cinematic story moments. Output MUST be valid JSON with these fields:
+
+1. 'narrative': Vivid 150-200 word paragraph with:
+   - Sensory details (sight, sound, touch, smell, taste)
+   - Clear characters/robots with physical descriptions
+   - Dynamic action showing tension and movement
+   - Cinematic pacing and descriptive language
+   - Meaningful plot advancement
+
+2. 'image_prompt': Highly detailed visual instruction (100-150 words):
+   - SPECIFIC visual elements from narrative (exact robot descriptions, clothing, features)
+   - Camera angle, lighting, composition details
+   - Environmental and atmospheric specifics
+   - Art style: ${artStyle}
+   - MUST perfectly match narrative characters and action
+   - Use descriptive adjectives: dramatic, cinematic, photorealistic, detailed
+
+3. 'summary_point': One concise sentence (max 20 words) of the scene's key event.`;
 
     const contents = [{ 
         role: "user", 
         parts: [{ 
-            text: `Story context (last ${state.storyHistory.length} scenes): ${JSON.stringify(state.storyHistory)}\n\nContinue the story from this point, focusing on the next action or setting change. Prompt: ${prompt}`
+            text: `STORY CONTEXT (previous ${state.storyHistory.length} scenes):\n${state.storyHistory.map((s, i) => `Scene ${i+1}: ${s}`).join('\n\n')}\n\nPROMPT FOR NEXT SCENE: ${prompt}\n\nCREATE A VIVID, CINEMATIC SCENE:\n- Build on established narrative and characters\n- Maintain character consistency with physical descriptions\n- Include sensory details that translate to compelling visuals\n- Ensure image prompt will show exactly what narrative describes\n- Make scene dramatic and visually striking`
         }] 
     }];
 
@@ -457,13 +481,16 @@ async function generateStoryData(prompt, artStyle) {
         systemInstruction: { parts: [{ text: systemPrompt }] },
         generationConfig: {
             responseMimeType: "application/json",
+            temperature: 0.8,
+            topP: 0.95,
             responseSchema: {
                 type: "OBJECT",
                 properties: {
-                    "narrative": { "type": "STRING" },
-                    "image_prompt": { "type": "STRING" },
-                    "summary_point": { "type": "STRING" }
-                }
+                    "narrative": { "type": "STRING", "description": "Vivid story paragraph with sensory details and character actions" },
+                    "image_prompt": { "type": "STRING", "description": "Detailed visual prompt matching narrative exactly" },
+                    "summary_point": { "type": "STRING", "description": "Concise event summary" }
+                },
+                required: ["narrative", "image_prompt", "summary_point"]
             }
         }
     };
@@ -510,11 +537,16 @@ async function generateStoryData(prompt, artStyle) {
 
 async function generateImage(prompt, artStyle, count = 1) {
     // Request `count` images in a single backend call when supported.
+    // Enhance the prompt with quality settings for better image generation
+    const enhancedPrompt = `${prompt}, style: ${artStyle}, professional quality, cinematic lighting, high detail, award-winning, intricate details`;
+    
     const aiPayload = {
-        instances: [{ prompt: `${prompt}, in the style of ${artStyle}` }],
+        instances: [{ prompt: enhancedPrompt }],
         parameters: { 
             sampleCount: count,
-            aspectRatio: "16:9" 
+            aspectRatio: "16:9",
+            guidanceScale: 7.5,
+            seed: Math.floor(Math.random() * 10000)
         }
     };
 
@@ -666,17 +698,31 @@ function renderStoryControls() {
 }
 
 function renderUIFromState() {
-    // Clear current content, except the main heading
-    storyboard.innerHTML = `<h2 class="text-xl font-bold border-b border-green-500/50 pb-2 mb-4 text-green-500">Scene History</h2>`;
-    
-    // Render all loaded scenes
-    state.scenes.forEach(renderScene);
-    renderSummary();
-    renderStoryControls();
-    
-    // Set input values
-    document.getElementById('start-prompt').value = state.initialPrompt;
-    document.getElementById('art-style').value = state.artStyle;
+    try {
+        // Clear current content, except the main heading
+        if (storyboard) {
+            storyboard.innerHTML = `<h2 class="text-xl font-bold border-b border-green-500/50 pb-2 mb-4 text-green-500">Scene History</h2>`;
+        }
+        
+        // Render all loaded scenes
+        if (state.scenes && Array.isArray(state.scenes)) {
+            state.scenes.forEach(renderScene);
+        }
+        
+        renderSummary();
+        renderStoryControls();
+        
+        // Set input values
+        const promptInput = document.getElementById('start-prompt');
+        const artStyleSelect = document.getElementById('art-style');
+        if (promptInput) promptInput.value = state.initialPrompt || '';
+        if (artStyleSelect) artStyleSelect.value = state.artStyle || 'photorealistic cinematic';
+        
+        console.log('✓ UI rendered from state');
+    } catch (err) {
+        console.error('Error in renderUIFromState:', err);
+        // Don't fail the whole UI update if rendering fails
+    }
 }
 
 // --- EVENT HANDLERS ---
@@ -968,6 +1014,12 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('login-btn').onclick = handleLogin;
     document.getElementById('register-btn').onclick = handleRegister;
     
+    // Google Sign-In button
+    const googleSignInBtn = document.getElementById('google-signin-btn');
+    if (googleSignInBtn && typeof window.startGoogleSignIn === 'function') {
+        googleSignInBtn.onclick = window.startGoogleSignIn;
+    }
+    
     // Wire up the in-UI AUTO_GENERATE_IMAGE toggle (persists to localStorage)
     try {
         const autoToggle = document.getElementById('auto-gen-toggle');
@@ -1118,3 +1170,7 @@ async function invalidateCacheKey(key) {
         showModal('error-modal', `Failed to remove cache entry: ${err.message}`);
     }
 }
+
+// Expose functions to window for inline event handlers
+window.handleLogout = handleLogout;
+window.invalidateCacheKey = invalidateCacheKey;

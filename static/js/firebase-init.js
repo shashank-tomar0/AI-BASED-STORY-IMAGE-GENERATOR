@@ -228,8 +228,23 @@ function updateUserUI(user) {
 }
 
 function showMainApp() {
-  document.getElementById('auth-screen')?.classList.add('hidden');
-  document.getElementById('story-controls')?.classList.remove('hidden');
+  console.log('🎯 showMainApp() called - hiding auth screen, showing story controls');
+  const authScreen = document.getElementById('auth-screen');
+  const storyControls = document.getElementById('story-controls');
+  
+  if (authScreen) {
+    authScreen.classList.add('hidden');
+    console.log('  ✓ auth-screen hidden');
+  } else {
+    console.warn('  ⚠️ auth-screen element not found!');
+  }
+  
+  if (storyControls) {
+    storyControls.classList.remove('hidden');
+    console.log('  ✓ story-controls shown');
+  } else {
+    console.warn('  ⚠️ story-controls element not found!');
+  }
 }
 
 function showAuthScreen() {
