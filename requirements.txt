@@ -1,4 +1,7 @@
 Flask
+Flask-CORS
 requests
 python-dotenv
 Flask-SQLAlchemy
+firebase-admin
+PyJWT

@@ -48,6 +48,13 @@ hypothesis/
 venv/
 venv_*/
 .venv/
+
+# Firebase service account (never commit)
+firebase-service-account.json
+
+# Local environment files
+.env
+.env.*
 ENV/
 env/
 env.bak/

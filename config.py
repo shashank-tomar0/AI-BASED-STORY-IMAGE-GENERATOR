@@ -78,5 +78,23 @@ class Config:
     LLM_PROVIDER = os.environ.get('LLM_PROVIDER') or ('mock' if not _has_gemini else 'gemini')
     USE_MOCK_FALLBACK = os.environ.get('USE_MOCK_FALLBACK', 'True').lower() in ('1','true','yes')
 
+    # --- Google OAuth2 configuration (optional) ---
+    # To enable "Sign in with Google" set these environment variables in a
+    # .env file or your environment. The redirect URI should point to
+    # /api/auth/google/callback (e.g., http://127.0.0.1:5000/api/auth/google/callback)
+    GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID') or None
+    GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET') or None
+    GOOGLE_OAUTH_REDIRECT = os.environ.get('GOOGLE_OAUTH_REDIRECT') or None
+
+    # --- Firebase Authentication configuration (recommended for production) ---
+    # Firebase provides easier Google sign-in and supports multiple auth providers
+    # Get these from Firebase Console: https://console.firebase.google.com/
+    FIREBASE_WEB_API_KEY = os.environ.get('FIREBASE_WEB_API_KEY') or None
+    FIREBASE_PROJECT_ID = os.environ.get('FIREBASE_PROJECT_ID') or None
+    FIREBASE_AUTH_DOMAIN = os.environ.get('FIREBASE_AUTH_DOMAIN') or None
+    # Service account for backend verification (JSON file path or JSON string)
+    FIREBASE_SERVICE_ACCOUNT_PATH = os.environ.get('FIREBASE_SERVICE_ACCOUNT_PATH') or None
+    FIREBASE_SERVICE_ACCOUNT_JSON = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON') or None
+
 # Initialize a default admin user for convenience (for dev only)
 Config.USERS['admin-uuid'] = {'username': 'admin', 'password_hash': 'pass'}

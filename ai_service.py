@@ -6,11 +6,15 @@ import base64
 import hashlib
 import time
 import os
+import threading
 from flask import Blueprint, request, jsonify, current_app
 from auth import token_required
 
 # Create a Blueprint for AI routes
 ai_bp = Blueprint('ai', __name__, url_prefix='/api/ai')
+
+# Simple in-memory job store for dev async image generation
+JOBS = {}  # job_id -> { status: 'pending'|'done'|'error', result: {...} }
 
 
 def _save_image_b64(b64, prompt_text=None):
@@ -269,34 +273,64 @@ def generate_prompt(user_id):
                 pass
             try:
                 cand = resp_json.get('candidates', [])
+
+                def _synthesize_from_payload(reason='fallback'):
+                    prompt_text = ''
+                    try:
+                        if isinstance(payload, dict):
+                            contents = payload.get('contents') or payload.get('messages')
+                            if contents and isinstance(contents, list) and len(contents) > 0:
+                                first = contents[0]
+                                if isinstance(first, dict):
+                                    parts_local = first.get('parts') or []
+                                    if parts_local and isinstance(parts_local, list) and len(parts_local) > 0:
+                                        p0 = parts_local[0]
+                                        prompt_text = p0.get('text','') if isinstance(p0, dict) else str(p0)
+                                    else:
+                                        prompt_text = first.get('text','') or ''
+                                else:
+                                    prompt_text = str(first)
+                        if not prompt_text:
+                            prompt_text = str(payload)[:200]
+                    except Exception:
+                        prompt_text = str(payload)
+
+                    narrative = _synthesize_narrative(prompt_text, paragraphs=4)
+                    image_prompt = f"{prompt_text[:160]} -- photorealistic cinematic"
+                    summary_point = narrative.split('\n')[0][:160]
+                    normalized_local = {
+                        'narrative': narrative,
+                        'image_prompt': image_prompt,
+                        'summary_point': summary_point
+                    }
+                    resp_json['normalized_candidate'] = normalized_local
+                    resp_json['used_real_llm'] = False
+                    resp_json['candidates'] = [{
+                        'content': {
+                            'parts': [{ 'text': json.dumps(normalized_local) }]
+                        },
+                        'note': f'synthesized because {reason}'
+                    }]
+
                 if isinstance(cand, list) and len(cand) > 0:
                     content = cand[0].get('content', {})
                     parts = content.get('parts', [])
-                    if isinstance(parts, list) and len(parts) > 0:
+                    if not isinstance(parts, list) or len(parts) == 0 or not parts[0].get('text'):
+                        _synthesize_from_payload('empty parts from upstream')
+                    else:
                         txt = parts[0].get('text', '').strip()
 
                         # --- Sanitize common LLM artifacts ---
-                        # Some LLMs return JSON wrapped in markdown/code fences
-                        # (for example: ```json\n{...}\n```) or include extra
-                        # surrounding text. Try to clean those cases so the
-                        # frontend always receives a plain JSON string.
                         try:
-                            # Remove a leading code fence line such as "```json" or "```"
                             if txt.startswith('```'):
-                                # strip the first fence line
                                 nl = txt.find('\n')
                                 if nl != -1:
                                     txt = txt[nl+1:]
-                                # remove trailing fence if present
                                 if txt.endswith('```'):
                                     txt = txt[:-3].strip()
                         except Exception:
                             pass
 
-                        # If the text contains an embedded JSON object, try to
-                        # extract the first {...} block and parse that. This
-                        # handles cases where the model adds commentary around
-                        # the JSON or returns extra formatting.
                         parsed = None
                         try:
                             if '{' in txt and '}' in txt:
@@ -307,34 +341,27 @@ def generate_prompt(user_id):
                         except Exception:
                             parsed = None
 
-                        # Final attempt: parse the whole string as JSON, else
-                        # fall back to treating the text as a narrative string.
                         if parsed is None:
                             try:
                                 parsed = json.loads(txt)
                             except Exception:
                                 parsed = {'narrative': txt}
 
-                        # Ensure keys exist
                         narrative = parsed.get('narrative') or parsed.get('text') or ''
                         image_prompt = parsed.get('image_prompt') or ''
                         summary_point = parsed.get('summary_point') or parsed.get('summary') or ''
 
-                        # If image_prompt is missing or empty, synthesize one from the narrative
                         if not image_prompt:
-                            # Use first sentence or a short extract as the visual prompt
                             short = ''
                             if narrative:
                                 short = narrative.split('\n')[0].split('. ')[0][:180]
                             else:
-                                # Try to derive from the original request payload
                                 try:
                                     short = str(payload)[:180]
                                 except Exception:
                                     short = ''
                             image_prompt = f"{short} -- photorealistic cinematic"
 
-                        # Reassemble normalized JSON string back into the response
                         normalized = {
                             'narrative': narrative,
                             'image_prompt': image_prompt,
@@ -345,59 +372,16 @@ def generate_prompt(user_id):
                             print('GENERATE_PROMPT_NORMALIZED', json.dumps(normalized)[:1000])
                         except Exception:
                             pass
-                        # Also expose a normalized_candidate at top-level to
-                        # simplify frontend parsing and make the API resilient
-                        # to formatting differences from upstream LLMs.
                         try:
                             resp_json['normalized_candidate'] = normalized
-                            # Indicate that this response originated from the
-                            # upstream LLM provider (even if we synthesized a
-                            # normalized candidate from its free-form text).
                             resp_json['used_real_llm'] = True
                         except Exception:
                             pass
-                        # write back into structure
                         content['parts'] = parts
                         cand[0]['content'] = content
                         resp_json['candidates'] = cand
                 else:
-                    # No candidates found in upstream response; synthesize a
-                    # minimal normalized candidate from the original payload so
-                    # the frontend always receives structured data.
-                    try:
-                        prompt_text = ''
-                        if isinstance(payload, dict):
-                            contents = payload.get('contents') or payload.get('messages')
-                            if contents and isinstance(contents, list) and len(contents) > 0:
-                                first = contents[0]
-                                if isinstance(first, dict):
-                                    parts = first.get('parts') or []
-                                    if parts and isinstance(parts, list) and len(parts) > 0:
-                                        p0 = parts[0]
-                                        if isinstance(p0, dict):
-                                            prompt_text = p0.get('text','')
-                                        else:
-                                            prompt_text = str(p0)
-                                    else:
-                                        prompt_text = first.get('text','') or ''
-                                else:
-                                    prompt_text = str(first)
-                        if not prompt_text:
-                            prompt_text = str(payload)[:200]
-                    except Exception:
-                        prompt_text = str(payload)
-
-                    normalized = {
-                        'narrative': f"Auto-generated narrative from request: {prompt_text[:200]}",
-                        'image_prompt': f"{prompt_text[:160]} -- photorealistic cinematic",
-                        'summary_point': f"Auto summary: {prompt_text[:80]}"
-                    }
-                    try:
-                        resp_json['normalized_candidate'] = normalized
-                        # Upstream call succeeded; mark that a real LLM was used
-                        resp_json['used_real_llm'] = True
-                    except Exception:
-                        pass
+                    _synthesize_from_payload('no candidates returned')
             except Exception:
                 # If any post-processing fails, ignore and return original provider response
                 pass
@@ -1005,3 +989,180 @@ def generate_main_image(user_id):
         return jsonify({'error': 'Picsum image fetch failed.'}), 502
     except Exception as e:
         return jsonify({'error': f'Internal Server Error during main image call: {str(e)}'}), 500
+
+
+@ai_bp.route('/generate-preview', methods=['POST'])
+@token_required
+def generate_preview(user_id):
+    """Return a fast, deterministic low-res preview for a given payload.
+
+    Behavior: Always returns a seeded Picsum image (small size) derived from
+    the prompt text so the UI can show an immediate preview while the
+    full-resolution generation runs (if requested).
+    """
+    try:
+        data = request.get_json() or {}
+        payload = data.get('payload') or data
+
+        prompt_text = _extract_prompt_from_payload(payload)
+        if not prompt_text:
+            prompt_text = 'preview'
+
+        # Use a short seed derived from the prompt for deterministic previews
+        try:
+            seed = hashlib.sha1(prompt_text.encode('utf-8')).hexdigest()[:8]
+        except Exception:
+            seed = hashlib.sha1(str(time.time()).encode('utf-8')).hexdigest()[:8]
+
+        # Small preview size for speed
+        width = 512
+        height = 288
+        picsum_url = f'https://picsum.photos/seed/{seed}/{width}/{height}'
+        pic_resp = requests.get(picsum_url, timeout=10)
+        if pic_resp.status_code == 200:
+            img_bytes = pic_resp.content
+            b64 = base64.b64encode(img_bytes).decode('utf-8')
+            return jsonify({'predictions': [{'bytesBase64Encoded': b64}], 'preview': True}), 200
+
+        return jsonify({'error': 'Preview fetch failed'}), 502
+    except Exception as e:
+        return jsonify({'error': f'Internal Server Error during preview generation: {str(e)}'}), 500
+
+
+def _async_generate_and_cache(job_id, payload, user_id, app_obj=None):
+    """Background worker that generates a deterministic high-res Picsum image
+    for the given payload and persists it to the image cache. This is a
+    lightweight stand-in for a full provider-backed background job and
+    allows the UI to poll for completion via the job endpoints.
+    """
+    try:
+        JOBS[job_id]['status'] = 'running'
+        # If an app object was provided, ensure we run inside its application context
+        if app_obj:
+            ctx = app_obj.app_context()
+            ctx.push()
+        prompt_text = _extract_prompt_from_payload(payload) or 'async'
+
+        provider = current_app.config.get('IMAGE_PROVIDER', 'google')
+        params = {}
+        try:
+            params_obj = payload.get('parameters') if isinstance(payload, dict) else {}
+            if isinstance(params_obj, dict):
+                params['sampleCount'] = params_obj.get('sampleCount') or params_obj.get('samples') or 1
+        except Exception:
+            params['sampleCount'] = 1
+
+        cache_key = _make_image_cache_key(prompt_text, provider, params)
+
+        # If cache already exists, return that quickly
+        cache_ttl = current_app.config.get('IMAGE_CACHE_TTL_SECONDS', 60 * 60 * 24)
+        cached = _load_image_cache(cache_key, ttl_seconds=cache_ttl)
+        if cached:
+            # build file urls from persisted files
+            uploads_dir = os.path.join(current_app.static_folder, 'uploads')
+            meta_path = os.path.join(uploads_dir, f'cache_{cache_key}.json')
+            files = []
+            try:
+                with open(meta_path, 'r', encoding='utf-8') as f:
+                    meta = json.load(f)
+                    files = meta.get('files', [])
+            except Exception:
+                files = []
+
+            JOBS[job_id]['status'] = 'done'
+            JOBS[job_id]['result'] = {'key': cache_key, 'files': files, 'file_urls': [f"/static/uploads/{n}" for n in files]}
+            if app_obj:
+                ctx.pop()
+            return
+
+        # For now, create a deterministic high-res Picsum image as the "full" result
+        try:
+            seed = hashlib.sha1(prompt_text.encode('utf-8')).hexdigest()[:8]
+        except Exception:
+            seed = hashlib.sha1(str(time.time()).encode('utf-8')).hexdigest()[:8]
+        width = 1200
+        height = 675
+        picsum_url = f'https://picsum.photos/seed/{seed}/{width}/{height}'
+        pic_resp = requests.get(picsum_url, timeout=30)
+        if pic_resp.status_code == 200:
+            img_bytes = pic_resp.content
+            b64 = base64.b64encode(img_bytes).decode('utf-8')
+            # persist to cache using existing helper
+            try:
+                _persist_image_cache(cache_key, [b64], prompt_text)
+            except Exception:
+                pass
+
+            # Read back metadata to report files
+            uploads_dir = os.path.join(current_app.static_folder, 'uploads')
+            meta_path = os.path.join(uploads_dir, f'cache_{cache_key}.json')
+            files = []
+            try:
+                with open(meta_path, 'r', encoding='utf-8') as f:
+                    meta = json.load(f)
+                    files = meta.get('files', [])
+            except Exception:
+                files = []
+
+            JOBS[job_id]['status'] = 'done'
+            JOBS[job_id]['result'] = {'key': cache_key, 'files': files, 'file_urls': [f"/static/uploads/{n}" for n in files]}
+            if app_obj:
+                ctx.pop()
+            return
+
+        # If Picsum failed, mark job as error and include message
+        JOBS[job_id]['status'] = 'error'
+        JOBS[job_id]['result'] = {'error': 'Failed to fetch preview image for async job.'}
+        if app_obj:
+            ctx.pop()
+    except Exception as e:
+        JOBS[job_id]['status'] = 'error'
+        JOBS[job_id]['result'] = {'error': str(e)}
+        if app_obj:
+            try:
+                ctx.pop()
+            except Exception:
+                pass
+
+
+@ai_bp.route('/generate-image-async', methods=['POST'])
+@token_required
+def generate_image_async(user_id):
+    """Enqueue an async image generation job. Returns a job id which can be
+    polled with /generate-image-job/<job_id>. The background worker will
+    create a deterministic high-res Picsum image and persist it to the cache
+    so subsequent synchronous requests will hit the cache.
+    """
+    try:
+        data = request.get_json() or {}
+        payload = data.get('payload') or data
+
+        prompt_text = _extract_prompt_from_payload(payload) or str(time.time())
+        # create a stable job id
+        job_id = hashlib.sha1(f"{prompt_text}:{time.time()}".encode('utf-8')).hexdigest()[:16]
+        JOBS[job_id] = {'status': 'pending', 'result': None, 'ts': int(time.time()), 'user_id': user_id}
+
+        # start background thread, pass real app object so worker can push app context
+        app_obj = current_app._get_current_object()
+        t = threading.Thread(target=_async_generate_and_cache, args=(job_id, payload, user_id, app_obj), daemon=True)
+        t.start()
+
+        return jsonify({'job_id': job_id, 'status': 'pending'}), 202
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@ai_bp.route('/generate-image-job/<job_id>', methods=['GET'])
+@token_required
+def generate_image_job_status(user_id, job_id):
+    """Return the status and result of an async image generation job."""
+    try:
+        job = JOBS.get(job_id)
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+        # For security, ensure the requesting user owns the job (dev scaffold only)
+        if job.get('user_id') != user_id:
+            return jsonify({'error': 'Unauthorized'}), 403
+        return jsonify({'job_id': job_id, 'status': job.get('status'), 'result': job.get('result')}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

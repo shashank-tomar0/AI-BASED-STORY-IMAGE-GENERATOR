@@ -5,95 +5,791 @@
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>StoryCanvas_V1.0 - AI Narrative Generator</title>
         <script src="https://cdn.tailwindcss.com"></script>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Playfair+Display:wght@400;600;700&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400;1,700&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
     
+                <!-- Firebase SDK -->
+                <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+                <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+        
         <style>
-                :root{
-                        --bg:#061219; /* deep navy */
-                        --panel:#081521; /* panel bg */
-                        --accent:#D4AF37; /* gold accent for premium feel */
-                        --accent-2:#FFD77A;
-                        --muted:#cdd6d1; /* soft off-white */
-                        --muted-2:#9fb7ad;
-                        --danger:#ff6b6b;
-                        --glass: rgba(255,255,255,0.03);
-                        --card-glow: 0 18px 60px rgba(212,175,55,0.06);
+                /* ========== REFINED CYBERPUNK COLOR PALETTE ========== */
+                :root {
+                        /* Core backgrounds */
+                        --bg: #0a0e1a;
+                        --surface: #141824;
+                        --surface-elevated: #1a1f2e;
+                        
+                        /* Primary actions - electric cyan */
+                        --primary: #00ff88;
+                        --primary-hover: #00cc6a;
+                        --primary-glow: 0 0 40px rgba(0,255,136,0.3);
+                        
+                        /* Accent & highlights */
+                        --accent: #ff6b9d;
+                        --accent-hover: #ff4c7e;
+                        --accent-soft: #ffc857;
+                        --accent-glow: 0 0 40px rgba(255,107,157,0.25);
+                        
+                        /* Text hierarchy */
+                        --text-primary: #f0f4f8;
+                        --text-secondary: #9ca3af;
+                        --text-tertiary: #6b7280;
+                        
+                        /* Semantic colors */
+                        --success: #10b981;
+                        --warning: #fbbf24;
+                        --error: #ef4444;
+                        
+                        /* Effects */
+                        --glass: rgba(255,255,255,0.04);
+                        --card-glow: 0 8px 32px rgba(0,255,136,0.08);
+                        --shadow-lg: 0 20px 60px rgba(0,0,0,0.5);
+                        
+                        /* Typography scale */
+                        --text-xs: 0.75rem;
+                        --text-sm: 0.875rem;
+                        --text-base: 1rem;
+                        --text-lg: 1.125rem;
+                        --text-xl: 1.5rem;
+                        --text-2xl: 2rem;
                 }
-                body { font-family: 'Inter', 'Space Mono', monospace; background: radial-gradient(1000px 500px at 10% 8%, rgba(212,175,55,0.03), transparent), linear-gradient(180deg,#031017 0%, #04121a 100%); color:var(--muted); }
 
-                /* Card / panel base */
-                .terminal-card{
-                        background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.06));
-                        border: 1px solid rgba(255,255,255,0.02);
-                        box-shadow: var(--card-glow), 0 6px 26px rgba(0,0,0,0.6) inset;
-                        border-radius: 16px;
-                        padding: 1.25rem;
-                        transition: transform .18s ease, box-shadow .18s ease;
+                /* ========== BASE TYPOGRAPHY ========== */
+                body { 
+                        font-family: 'JetBrains Mono', monospace;
+                        background: radial-gradient(1200px 600px at 15% 10%, rgba(0,255,136,0.05), transparent),
+                                    radial-gradient(800px 400px at 85% 90%, rgba(255,107,157,0.03), transparent),
+                                    linear-gradient(180deg, #0a0e1a 0%, #050810 100%);
+                        color: var(--text-secondary);
+                        line-height: 1.6;
+                        font-size: var(--text-base);
+                        font-weight: 400;
+                        letter-spacing: -0.01em;
+                }
+                
+                h1, h2, h3, h4, h5, h6 {
+                        font-family: 'JetBrains Mono', monospace;
+                        font-weight: 700;
+                        line-height: 1.3;
+                        color: var(--text-primary);
+                        letter-spacing: -0.02em;
+                }
+                
+                code, .terminal-output, #provider-banner {
+                        font-family: 'JetBrains Mono', monospace;
+                        font-size: 0.9em;
                 }
 
-                .terminal-input, .terminal-select, textarea.terminal-input{
-                        width:100%; padding:.75rem; background: rgba(255,255,255,0.02); border:1px solid rgba(0,255,136,0.06);
-                        color:var(--muted); border-radius:8px; outline:none; box-shadow: inset 0 1px 0 rgba(255,255,255,0.01);
+                /* ========== CARD COMPONENTS ========== */
+                .terminal-card {
+                        background: linear-gradient(135deg, rgba(20, 24, 36, 0.85), rgba(20, 24, 36, 0.65));
+                        border: 1px solid rgba(255,255,255,0.1);
+                        box-shadow: 0 8px 32px rgba(0,0,0,0.5), 
+                                    inset 0 1px 0 rgba(255,255,255,0.06),
+                                    0 0 0 1px rgba(0,255,136,0.03);
+                        border-radius: 18px;
+                        padding: 2rem;
+                        backdrop-filter: blur(24px);
+                        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                        position: relative;
+                        overflow: hidden;
+                }
+                
+                .terminal-card::before {
+                        content: '';
+                        position: absolute;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        height: 2px;
+                        background: linear-gradient(90deg, transparent, rgba(0,255,136,0.4), transparent);
+                        opacity: 0;
+                        transition: opacity 0.3s;
+                }
+                
+                .terminal-card:hover::before {
+                        opacity: 1;
+                }
+                
+                .terminal-card:hover {
+                        border-color: rgba(0,255,136,0.25);
+                        box-shadow: 0 12px 48px rgba(0,0,0,0.6), 
+                                    inset 0 1px 0 rgba(255,255,255,0.1),
+                                    0 0 0 1px rgba(0,255,136,0.2),
+                                    0 0 60px rgba(0,255,136,0.1);
+                        transform: translateY(-3px);
                 }
 
-                .terminal-button{
-                        display:inline-flex; align-items:center; justify-content:center; gap:.5rem;
-                        background: linear-gradient(90deg,var(--accent),var(--accent-2)); color:#081418; font-weight:600; border-radius:12px;
-                        padding:.7rem 1.05rem; border:none; cursor:pointer; box-shadow: 0 14px 40px rgba(0,0,0,0.6);
-                        transform: translateZ(0);
-                        letter-spacing: .2px;
+                /* ========== FORM INPUTS ========== */
+                .terminal-input, .terminal-select, textarea.terminal-input {
+                        width: 100%;
+                        padding: 1.125rem 1.25rem;
+                        background: linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+                        border: 1.5px solid rgba(255,255,255,0.12);
+                        color: var(--text-primary);
+                        border-radius: 12px;
+                        outline: none;
+                        font-family: 'JetBrains Mono', monospace;
+                        font-size: var(--text-sm);
+                        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                        box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+                }
+                
+                .terminal-input:hover, .terminal-select:hover, textarea.terminal-input:hover {
+                        border-color: rgba(255,255,255,0.18);
+                        background: linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03));
+                }
+                
+                .terminal-input:focus, .terminal-select:focus, textarea.terminal-input:focus {
+                        border-color: var(--primary);
+                        background: linear-gradient(135deg, rgba(0,255,136,0.08), rgba(0,255,136,0.03));
+                        box-shadow: 0 0 0 4px rgba(0,255,136,0.15), 
+                                    0 6px 20px rgba(0,255,136,0.25),
+                                    inset 0 1px 0 rgba(255,255,255,0.08);
+                        transform: translateY(-2px);
+                }
+                
+                .terminal-input::placeholder {
+                        color: var(--text-tertiary);
                 }
 
-        .terminal-button-secondary{ background:transparent; color:var(--muted); border:1px solid rgba(255,255,255,0.03); padding:.5rem .9rem; border-radius:10px }
+                /* ========== BUTTONS WITH MICRO-INTERACTIONS ========== */
+                .terminal-button {
+                        display: inline-flex;
+                        align-items: center;
+                        justify-content: center;
+                        gap: 0.5rem;
+                        background: linear-gradient(135deg, var(--primary), #00d9a3);
+                        color: #0a0e1a;
+                        font-family: 'JetBrains Mono', monospace;
+                        font-weight: 600;
+                        font-size: var(--text-sm);
+                        border-radius: 12px;
+                        padding: 0.75rem 1.25rem;
+                        border: none;
+                        cursor: pointer;
+                        box-shadow: var(--primary-glow), 0 4px 20px rgba(0,0,0,0.3);
+                        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+                        position: relative;
+                        overflow: hidden;
+                }
+                
+                .terminal-button::before {
+                        content: '';
+                        position: absolute;
+                        top: 50%;
+                        left: 50%;
+                        width: 0;
+                        height: 0;
+                        border-radius: 50%;
+                        background: rgba(255,255,255,0.3);
+                        transform: translate(-50%, -50%);
+                        transition: width 0.6s, height 0.6s;
+                }
+                
+                .terminal-button:hover::before {
+                        width: 300px;
+                        height: 300px;
+                }
+                
+                .terminal-button:hover {
+                        transform: translateY(-2px);
+                        box-shadow: var(--primary-glow), 0 8px 30px rgba(0,255,136,0.4);
+                }
+                
+                .terminal-button:active {
+                        transform: translateY(0);
+                        box-shadow: 0 2px 10px rgba(0,255,136,0.2);
+                }
+                
+                .terminal-button:disabled {
+                        opacity: 0.5;
+                        cursor: not-allowed;
+                        transform: none;
+                }
 
-                .loading-spinner { border:4px solid rgba(0,255,136,0.08); border-top:4px solid var(--accent); border-radius:50%; width:20px; height:20px; animation:spin 1s linear infinite }
-                @keyframes spin{ to{ transform:rotate(360deg) }}
+                /* ========== SITE FOOTER ========== */
+                .site-footer {
+                        position: fixed;
+                        left: 0;
+                        right: 0;
+                        bottom: 0;
+                        z-index: 40;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        gap: .5rem;
+                        padding: .6rem 1rem;
+                        border-top: 1px solid rgba(0,255,136,0.25);
+                        background: linear-gradient(180deg, rgba(10,14,26,0.85), rgba(10,14,26,0.6));
+                        backdrop-filter: blur(8px);
+                        box-shadow: 0 -8px 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06);
+                }
+                .site-footer .footer-text {
+                        font-family: 'Orbitron', sans-serif;
+                        font-weight: 900;
+                        letter-spacing: 0.12em;
+                        font-size: .88rem;
+                        line-height: 1;
+                        background: linear-gradient(90deg, #00ff88, #57ffe1, #00ff88);
+                        -webkit-background-clip: text;
+                        background-clip: text;
+                        -webkit-text-fill-color: transparent;
+                        text-shadow: 0 0 18px rgba(0,255,136,0.35);
+                        white-space: nowrap;
+                }
+                .site-footer .copy-symbol {
+                        color: var(--accent-soft);
+                        text-shadow: 0 0 12px rgba(255,200,87,0.4);
+                        font-family: 'Orbitron', sans-serif;
+                        font-weight: 700;
+                }
 
-        .scene-card{ border-radius:12px; overflow:hidden; border:1px solid rgba(255,255,255,0.02); background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(0,0,0,0.06)); box-shadow: 0 8px 30px rgba(0,0,0,0.6) }
+                .terminal-button-secondary {
+                        background: transparent;
+                        color: var(--text-secondary);
+                        border: 1.5px solid rgba(255,255,255,0.1);
+                        padding: 0.625rem 1rem;
+                        border-radius: 10px;
+                        font-family: 'JetBrains Mono', monospace;
+                        font-size: var(--text-sm);
+                        cursor: pointer;
+                        transition: all 0.2s ease;
+                }
+                
+                .terminal-button-secondary:hover {
+                        border-color: var(--primary);
+                        color: var(--primary);
+                        background: rgba(0,255,136,0.05);
+                        transform: translateY(-1px);
+                }
 
-        .scene-card:hover{ transform: translateY(-8px); box-shadow: 0 26px 80px rgba(0,0,0,0.6); }
+                /* ========== LOADING STATES ========== */
+                .loading-spinner {
+                        border: 3px solid rgba(0,255,136,0.1);
+                        border-top: 3px solid var(--primary);
+                        border-radius: 50%;
+                        width: 20px;
+                        height: 20px;
+                        animation: spin 0.8s linear infinite;
+                }
+                
+                @keyframes spin {
+                        to { transform: rotate(360deg); }
+                }
+                
+                /* Skeleton loading states */
+                .skeleton-narrative {
+                        padding: 1rem;
+                        background: rgba(255,255,255,0.02);
+                        border-radius: 8px;
+                }
+                
+                .skeleton-line {
+                        height: 1rem;
+                        background: linear-gradient(90deg, 
+                                rgba(255,255,255,0.03) 25%, 
+                                rgba(0,255,136,0.08) 50%, 
+                                rgba(255,255,255,0.03) 75%);
+                        background-size: 200% 100%;
+                        animation: shimmer 1.5s infinite;
+                        border-radius: 4px;
+                        margin-bottom: 0.5rem;
+                }
+                
+                .skeleton-line.short {
+                        width: 60%;
+                }
+                
+                @keyframes shimmer {
+                        0% { background-position: 200% 0; }
+                        100% { background-position: -200% 0; }
+                }
 
-        .prompt-label{ color:var(--accent-2); font-size:.88rem; display:block; margin-bottom:.4rem; font-weight:600 }
+                /* ========== SCENE CARDS ========== */
+                .scene-card {
+                        border-radius: 18px;
+                        overflow: hidden;
+                        border: 1px solid rgba(255,255,255,0.08);
+                        background: linear-gradient(135deg, rgba(20, 24, 36, 0.9), rgba(20, 24, 36, 0.7));
+                        box-shadow: 0 10px 40px rgba(0,0,0,0.5),
+                                    inset 0 1px 0 rgba(255,255,255,0.05);
+                        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+                        position: relative;
+                }
+                
+                .scene-card::after {
+                        content: '';
+                        position: absolute;
+                        inset: 0;
+                        background: linear-gradient(135deg, rgba(0,255,136,0.05), transparent);
+                        opacity: 0;
+                        transition: opacity 0.4s;
+                        pointer-events: none;
+                }
 
-                /* Layout helpers */
-        .layout-main{ display:grid; grid-template-columns: 380px 1fr; gap:1.25rem; align-items:start }
-                .right-column{ display:flex; flex-direction:column; gap:1rem }
-                .summary-card{ height:220px; overflow:auto }
-        .storyboard{ display:grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap:1.25rem }
+                .scene-card:hover {
+                        transform: translateY(-12px) scale(1.03);
+                        box-shadow: 0 24px 80px rgba(0,255,136,0.2), 
+                                    0 0 0 1px rgba(0,255,136,0.4),
+                                    inset 0 1px 0 rgba(255,255,255,0.1),
+                                    0 0 60px rgba(0,255,136,0.15);
+                        border-color: rgba(0,255,136,0.3);
+                }
+                
+                .scene-card:hover::after {
+                        opacity: 1;
+                }
 
-                /* Modals centered */
-                #modal-container{ backdrop-filter: blur(3px) }
-                #error-modal, #success-modal{ width:520px }
-                .progress-box{ display:flex; align-items:center; gap:.6rem; padding:.5rem .75rem; background:rgba(0,0,0,0.25); border-radius:8px; color:var(--muted); border:1px solid rgba(0,255,136,0.04); }
-        /* Keep important action buttons visible on long pages */
-        .control-footer{ position:sticky; bottom:1rem; display:flex; gap:.6rem; align-items:center; background:transparent; padding-top:.5rem; z-index:20 }
+                .prompt-label {
+                        color: var(--primary);
+                        font-size: var(--text-xs);
+                        display: inline-block;
+                        margin-bottom: 0.75rem;
+                        font-weight: 600;
+                        text-transform: uppercase;
+                        letter-spacing: 1.5px;
+                        padding: 0.35rem 0.75rem;
+                        background: linear-gradient(135deg, rgba(0,255,136,0.1), rgba(0,255,136,0.05));
+                        border-radius: 6px;
+                        border: 1px solid rgba(0,255,136,0.2);
+                        position: relative;
+                        overflow: hidden;
+                }
+                
+                .prompt-label::before {
+                        content: '▶';
+                        margin-right: 0.5rem;
+                        color: var(--primary);
+                        font-size: 0.7em;
+                }
 
-        h1.site-title{ font-family: 'Playfair Display', 'Inter', serif; font-size:1.8rem; color:var(--accent); letter-spacing:.6px }
+                /* ========== LAYOUT ========== */
+                .layout-main {
+                        display: grid;
+                        grid-template-columns: 400px 1fr;
+                        gap: 1.5rem;
+                        align-items: start;
+                }
+                
+                .right-column {
+                        display: flex;
+                        flex-direction: column;
+                        gap: 1.5rem;
+                }
+                
+                .summary-card {
+                        height: 240px;
+                        overflow: auto;
+                        scrollbar-width: thin;
+                        scrollbar-color: var(--primary) transparent;
+                }
+                
+                .summary-card::-webkit-scrollbar {
+                        width: 6px;
+                }
+                
+                .summary-card::-webkit-scrollbar-track {
+                        background: transparent;
+                }
+                
+                .summary-card::-webkit-scrollbar-thumb {
+                        background: var(--primary);
+                        border-radius: 3px;
+                }
+                
+                .storyboard {
+                        display: grid;
+                        grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+                        gap: 1.5rem;
+                }
+
+                /* ========== MODALS ========== */
+                #modal-container {
+                        backdrop-filter: blur(8px);
+                        background: rgba(0,0,0,0.6);
+                }
+                
+                #error-modal, #success-modal, #cache-modal {
+                        max-width: 540px;
+                        animation: modalSlideIn 0.3s ease;
+                }
+                
+                @keyframes modalSlideIn {
+                        from {
+                                opacity: 0;
+                                transform: translateY(-20px);
+                        }
+                        to {
+                                opacity: 1;
+                                transform: translateY(0);
+                        }
+                }
+
+                .progress-box {
+                        display: flex;
+                        align-items: center;
+                        gap: 0.75rem;
+                        padding: 0.75rem 1rem;
+                        background: rgba(0,255,136,0.08);
+                        border-radius: 10px;
+                        color: var(--text-primary);
+                        border: 1px solid rgba(0,255,136,0.2);
+                        font-size: var(--text-sm);
+                }
+
+                .control-footer {
+                        position: sticky;
+                        bottom: 1rem;
+                        display: flex;
+                        gap: 0.75rem;
+                        align-items: center;
+                        background: transparent;
+                        padding-top: 0.75rem;
+                        z-index: 20;
+                }
+
+                /* ========== NARRATIVE DISPLAY ========== */
+                #staging-narrative {
+                        font-family: 'JetBrains Mono', monospace;
+                        font-size: var(--text-base);
+                        line-height: 1.9;
+                        color: var(--text-primary);
+                        padding: 1.75rem 1.5rem 1.75rem 2rem;
+                        background: linear-gradient(135deg, rgba(0,255,136,0.06), rgba(0,255,136,0.02));
+                        border-left: 4px solid var(--primary);
+                        border-radius: 14px;
+                        box-shadow: inset 0 1px 0 rgba(255,255,255,0.06),
+                                    0 4px 16px rgba(0,0,0,0.25);
+                        position: relative;
+                        overflow: hidden;
+                }
+                
+                #staging-narrative::before {
+                        content: '';
+                        position: absolute;
+                        left: 0;
+                        top: 0;
+                        bottom: 0;
+                        width: 4px;
+                        background: linear-gradient(180deg, var(--primary), rgba(0,255,136,0.4));
+                        box-shadow: 0 0 12px rgba(0,255,136,0.6),
+                                    0 0 24px rgba(0,255,136,0.3);
+                }
+
+                /* ========== IMAGE PROMPT EDITOR ========== */
+                #image-prompt-editor {
+                        font-family: 'JetBrains Mono', monospace;
+                        background: linear-gradient(135deg, rgba(255,200,100,0.08), rgba(255,200,100,0.03));
+                        border: 2px dashed rgba(255,200,100,0.35);
+                        color: var(--accent-soft);
+                        font-size: var(--text-sm);
+                        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                        border-radius: 12px;
+                        padding: 1.125rem 1.25rem;
+                }
+                
+                #image-prompt-editor:focus {
+                        border-color: var(--accent-soft);
+                        border-style: solid;
+                        background: linear-gradient(135deg, rgba(255,200,100,0.12), rgba(255,200,100,0.05));
+                        box-shadow: 0 0 0 4px rgba(255,200,100,0.15),
+                                    0 4px 16px rgba(255,200,100,0.2);
+                }
+                        background: rgba(255,200,100,0.08);
+                        box-shadow: 0 0 0 3px rgba(255,200,100,0.1);
+                }
+
+                /* ========== RESPONSIVE DESIGN ========== */
+                @media (max-width: 1024px) {
+                        .layout-main {
+                                grid-template-columns: 1fr;
+                        }
+                        
+                        .storyboard {
+                                grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+                        }
+                }
+                
+                /* ========== ENHANCED UI ELEMENTS ========== */
+                
+                /* Glowing accents */
+                .glow-accent {
+                        position: relative;
+                }
+                
+                .glow-accent::after {
+                        content: '';
+                        position: absolute;
+                        inset: -2px;
+                        background: linear-gradient(45deg, var(--primary), var(--accent));
+                        border-radius: inherit;
+                        z-index: -1;
+                        opacity: 0;
+                        filter: blur(10px);
+                        transition: opacity 0.3s;
+                }
+                
+                .glow-accent:hover::after {
+                        opacity: 0.5;
+                }
+                
+                /* Enhanced scrollbars */
+                ::-webkit-scrollbar {
+                        width: 8px;
+                        height: 8px;
+                }
+                
+                ::-webkit-scrollbar-track {
+                        background: rgba(255,255,255,0.02);
+                        border-radius: 4px;
+                }
+                
+                ::-webkit-scrollbar-thumb {
+                        background: linear-gradient(180deg, var(--primary), rgba(0,255,136,0.5));
+                        border-radius: 4px;
+                        transition: all 0.3s;
+                }
+                
+                ::-webkit-scrollbar-thumb:hover {
+                        background: var(--primary);
+                        box-shadow: 0 0 10px var(--primary);
+                }
+                
+                /* Status badges */
+                .status-badge {
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 0.5rem;
+                        padding: 0.35rem 0.75rem;
+                        background: linear-gradient(135deg, rgba(0,255,136,0.15), rgba(0,255,136,0.05));
+                        border: 1px solid rgba(0,255,136,0.3);
+                        border-radius: 20px;
+                        font-size: var(--text-xs);
+                        font-weight: 600;
+                        color: var(--primary);
+                        text-transform: uppercase;
+                        letter-spacing: 0.5px;
+                }
+                
+                .status-badge::before {
+                        content: '';
+                        width: 6px;
+                        height: 6px;
+                        background: var(--primary);
+                        border-radius: 50%;
+                        box-shadow: 0 0 6px var(--primary);
+                        animation: pulse 2s infinite;
+                }
+                
+                @keyframes pulse {
+                        0%, 100% { opacity: 1; transform: scale(1); }
+                        50% { opacity: 0.5; transform: scale(0.8); }
+                }
+                
+                /* Enhanced tooltips */
+                [title]:hover::after {
+                        content: attr(title);
+                        position: absolute;
+                        bottom: 100%;
+                        left: 50%;
+                        transform: translateX(-50%);
+                        padding: 0.5rem 0.75rem;
+                        background: rgba(10,14,26,0.95);
+                        border: 1px solid var(--primary);
+                        border-radius: 8px;
+                        font-size: var(--text-xs);
+                        white-space: nowrap;
+                        z-index: 1000;
+                        margin-bottom: 0.5rem;
+                        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+                }
+                
+                /* Grid pattern overlay */
+                body::before {
+                        content: '';
+                        position: fixed;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        bottom: 0;
+                        background-image: 
+                                linear-gradient(rgba(0,255,136,0.02) 1px, transparent 1px),
+                                linear-gradient(90deg, rgba(0,255,136,0.02) 1px, transparent 1px);
+                        background-size: 50px 50px;
+                        pointer-events: none;
+                        z-index: -1;
+                        opacity: 0.3;
+                }
+                
+                /* Scan line effect */
+                @keyframes scan {
+                        0% { transform: translateY(-100%); }
+                        100% { transform: translateY(100vh); }
+                }
+                
+                .terminal-card::after {
+                        content: '';
+                        position: absolute;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        height: 2px;
+                        background: linear-gradient(90deg, transparent, rgba(0,255,136,0.5), transparent);
+                        animation: scan 8s linear infinite;
+                        opacity: 0;
+                        pointer-events: none;
+                }
+                
+                .terminal-card:hover::after {
+                        opacity: 0.6;
+                }
+                
+                /* ========== RIPPLE EFFECT FOR BUTTONS ========== */
+                .ripple-effect {
+                        position: absolute;
+                        border-radius: 50%;
+                        background: rgba(255,255,255,0.6);
+                        transform: scale(0);
+                        animation: ripple-animation 0.6s ease-out;
+                        pointer-events: none;
+                }
+                
+                @keyframes ripple-animation {
+                        to {
+                                transform: scale(4);
+                                opacity: 0;
+                        }
+                }
+                
+                /* ========== ENHANCED FOCUS STATES ========== */
+                .input-focused {
+                        position: relative;
+                }
+                
+                .input-focused::before {
+                        content: '';
+                        position: absolute;
+                        inset: -4px;
+                        background: linear-gradient(45deg, var(--primary), var(--accent));
+                        border-radius: 14px;
+                        z-index: -1;
+                        opacity: 0.15;
+                        filter: blur(8px);
+
+                }
+
+                /* ========== LIGHT THEME ========== */
+                [data-theme="light"] {
+                        --bg: #f8f9fa;
+                        --surface: #ffffff;
+                        --surface-elevated: #f1f3f5;
+                        --bg-secondary: #e9ecef;
+                        --bg-tertiary: #dee2e6;
+    
+                        --text-primary: #212529;
+                        --text-secondary: #495057;
+                        --text-tertiary: #6c757d;
+    
+                        --primary: #00cc70;
+                        --accent: #e63980;
+                        --accent-soft: #ff9500;
+                }
+
+                [data-theme="light"] body {
+                        background: linear-gradient(180deg, #f8f9fa 0%, #e9ecef 100%);
+                }
+
+                [data-theme="light"] body::before {
+                        background-image: 
+                                linear-gradient(rgba(0,204,112,0.03) 1px, transparent 1px),
+                                linear-gradient(90deg, rgba(0,204,112,0.03) 1px, transparent 1px);
+                }
+
+                [data-theme="light"] .terminal-card {
+                        background: linear-gradient(135deg, rgba(255,255,255,0.9), rgba(255,255,255,0.7));
+                        border: 1px solid rgba(0,0,0,0.08);
+                        box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+                }
+
+                [data-theme="light"] .terminal-input,
+                [data-theme="light"] .terminal-select {
+                        background: rgba(255,255,255,0.9);
+                        border: 1.5px solid rgba(0,0,0,0.15);
+                }
+                
+                @media (max-width: 768px) {
+                        .storyboard {
+                                grid-template-columns: 1fr;
+                        }
+                        
+                        .control-footer {
+                                position: fixed;
+                                bottom: 0;
+                                left: 0;
+                                right: 0;
+                                padding: 1rem;
+                                background: rgba(10,14,26,0.95);
+                                backdrop-filter: blur(10px);
+                                border-top: 1px solid rgba(0,255,136,0.2);
+                        }
+                        
+                        .terminal-card {
+                                padding: 1rem;
+                        }
+                }
+
+                /* ========== HEADER STYLES ========== */
+                h1.site-title {
+                        font-family: 'Orbitron', sans-serif;
+                        font-size: 2.5rem;
+                        font-weight: 900;
+                        color: var(--primary);
+                        letter-spacing: 0.15em;
+                        text-shadow: 
+                                0 0 20px rgba(0,255,136,0.6),
+                                0 0 40px rgba(0,255,136,0.3),
+                                0 2px 8px rgba(0,0,0,0.8);
+                        text-transform: uppercase;
+                        transition: all 0.3s ease;
+                        position: relative;
+                        z-index: 1;
+                }
+                
+                h1.site-title:hover {
+                        letter-spacing: 0.2em;
+                        text-shadow: 
+                                0 0 30px rgba(0,255,136,0.9),
+                                0 0 60px rgba(0,255,136,0.5),
+                                0 4px 12px rgba(0,0,0,0.9);
+                        transform: scale(1.05);
+                }
         </style>
 </head>
-<body class="bg-gray-900 text-green-400 min-h-screen">
-        <div id="app" class="flex flex-col min-h-screen font-mono">
-                <header class="p-4 sticky top-0 z-10" style="border-bottom:1px solid rgba(0,255,136,0.06)">
+<body>
+        <div id="app" class="flex flex-col min-h-screen">
+                <header class="p-4 sticky top-0 z-10" style="border-bottom:1px solid rgba(0,255,136,0.15); background: rgba(10,14,26,0.9); backdrop-filter: blur(12px);">
                         <div class="flex items-center justify-between">
                                 <div class="flex items-center gap-4">
-                                        <h1 style="color:var(--accent); font-size:1.6rem; font-weight:700">&gt; StoryCanvas_V1.0</h1>
-                                        <div style="color:var(--muted); opacity:.9">AI Narrative & Scene Generator</div>
+                                        <h1 class="site-title">STORYCANVAS_V1.0</h1>
+                                        <div style="color:var(--text-tertiary); font-size:var(--text-sm);">AI Narrative & Scene Generator</div>
                                 </div>
                                         <div style="display:flex; align-items:center; gap:1rem">
-                                                <div id="provider-banner" style="color:var(--muted); font-size:.9rem; margin-right:0.5rem; padding:.35rem .6rem; background:rgba(255,255,255,0.02); border-radius:999px; border:1px solid rgba(255,255,255,0.02)"></div>
-                                                <button id="cache-btn" title="View image cache" class="terminal-button-secondary" style="font-size:.85rem;">Cache</button>
+                                                <div id="provider-banner" style="color:var(--text-tertiary); font-size:var(--text-xs); padding:.4rem .75rem; background:rgba(255,255,255,0.04); border-radius:999px; border:1px solid rgba(255,255,255,0.06)"></div>
+                                                                                                <button id="theme-toggle" onclick="toggleTheme()" class="terminal-button-secondary" style="font-size:var(--text-xs); padding:.4rem .75rem;" title="Toggle dark/light theme">🌙 Dark</button>
+                                                <button id="cache-btn" title="View image cache" class="terminal-button-secondary" style="font-size:var(--text-xs); padding:.4rem .75rem;">Cache</button>
                                                 <!-- Modern toggle -->
                                                 <div style="display:flex; align-items:center; gap:.6rem;">
                                                         <label for="auto-gen-toggle" style="display:flex; align-items:center; gap:.6rem; cursor:pointer; user-select:none">
-                                                                <div style="font-size:.85rem; color:var(--muted);">Auto-generate</div>
+                                                                <div style="font-size:var(--text-xs); color:var(--text-secondary);">Auto-generate</div>
                                                                 <div style="position:relative; width:46px; height:26px;">
                                                                         <input type="checkbox" id="auto-gen-toggle" style="opacity:0; width:46px; height:26px; position:absolute; left:0; top:0; cursor:pointer" />
-                                                                        <div id="auto-gen-track" style="position:absolute; inset:0; background:rgba(255,255,255,0.04); border-radius:999px; border:1px solid rgba(255,255,255,0.03);"></div>
-                                                                        <div id="auto-gen-thumb" style="position:absolute; left:4px; top:4px; width:18px; height:18px; background:linear-gradient(90deg,var(--accent),#2de6a8); border-radius:50%; box-shadow:0 6px 18px rgba(0,0,0,0.6); transition: left .18s ease;"></div>
+                                                                        <div id="auto-gen-track" style="position:absolute; inset:0; background:rgba(255,255,255,0.05); border-radius:999px; border:1px solid rgba(255,255,255,0.06);"></div>
+                                                                        <div id="auto-gen-thumb" style="position:absolute; left:4px; top:4px; width:18px; height:18px; background:linear-gradient(90deg,var(--primary),#00d9a3); border-radius:50%; box-shadow:0 4px 12px rgba(0,255,136,0.4); transition: left .2s ease;"></div>
                                                                 </div>
                                                         </label>
                                                 </div>
-                                                <div id="auth-info" class="text-sm"></div>
+                                                <div id="auth-info" style="font-size:var(--text-sm);"></div>
                                         </div>
                         </div>
                 </header>
@@ -102,25 +798,31 @@
                         <div class="layout-main">
                                 <aside>
                                         <div id="auth-screen" class="terminal-card mb-4">
-                                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:.6rem">
-                                                        <h2 style="color:var(--accent); font-weight:700">User</h2>
-                                                        <small style="color:var(--muted)">dev mode</small>
+                                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem">
+                                                        <h2 style="color:var(--primary); font-weight:700; font-size:var(--text-lg);">Authentication</h2>
+                                                        <small style="color:var(--text-tertiary); font-size:var(--text-xs);">dev mode</small>
                                                 </div>
-                                                <div style="display:flex; flex-direction:column; gap:.6rem">
+                                                <div style="display:flex; flex-direction:column; gap:.75rem">
                                                         <input type="text" id="auth-username" placeholder="Username" class="terminal-input">
                                                         <input type="password" id="auth-password" placeholder="Password" class="terminal-input">
-                                                        <div style="display:flex; gap:.6rem">
-                                                                <button id="login-btn" class="terminal-button" onclick="handleLogin()">Login</button>
-                                                                <button id="register-btn" class="terminal-button-secondary" onclick="handleRegister()">Register</button>
+                                                        <div style="display:flex; gap:.75rem">
+                                                                <button id="login-btn" class="terminal-button" onclick="handleLogin()" style="flex:1">Login</button>
+                                                                <button id="register-btn" class="terminal-button-secondary" onclick="handleRegister()" style="flex:1">Register</button>
+                                                        </div>
+                                                        <div style="margin-top:.5rem">
+                                                            <button id="google-signin-btn" class="terminal-button-secondary" onclick="startGoogleSignIn()" style="width:100%">
+                                                                <svg style="width:16px; height:16px; fill:currentColor" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                                                                Sign in with Google
+                                                            </button>
                                                         </div>
                                                 </div>
                                         </div>
 
                                         <div id="story-controls" class="hidden terminal-card mb-4">
-                                                <h3 style="color:var(--accent); margin-bottom:.6rem">Story Generation</h3>
-                                                <div id="new-story-inputs" style="display:flex; flex-direction:column; gap:.6rem">
-                                                        <textarea id="start-prompt" class="terminal-input" rows="5" placeholder="Enter your initial story idea or context (e.g., 'A rogue AI escapes its facility and tries to learn human emotion')."></textarea>
-                                                        <label class="prompt-label">Select Visual Style</label>
+                                                <h3 style="color:var(--primary); margin-bottom:1rem; font-size:var(--text-lg);">Story Generation</h3>
+                                                <div id="new-story-inputs" style="display:flex; flex-direction:column; gap:.75rem">
+                                                        <textarea id="start-prompt" class="terminal-input" rows="5" placeholder="Enter your initial story idea or context (e.g., 'A rogue AI escapes its facility and tries to learn human emotion')." style="resize:vertical; min-height:120px;"></textarea>
+                                                        <label class="prompt-label">Visual Style</label>
                                                         <select id="art-style" class="terminal-select">
                                                                 <option value="photorealistic cinematic">Photorealistic Cinematic</option>
                                                                 <option value="cyberpunk painting">Cyberpunk Digital Painting</option>
@@ -129,41 +831,63 @@
                                                                 <option value="voxel art">Voxel Art</option>
                                                         </select>
                                                         <div class="control-footer">
-                                                                <button id="start-btn" class="terminal-button" onclick="handleInitialGeneration()">INITIATE STORY</button>
+                                                                <button id="start-btn" class="terminal-button" onclick="handleInitialGeneration()">
+                                                                        <svg style="width:16px; height:16px; fill:currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                                                                        INITIATE STORY
+                                                                </button>
                                                                 <button id="generate-from-idea-btn" class="terminal-button-secondary" title="Generate an image directly from your idea without using the LLM">IMAGE FROM IDEA</button>
                                                         </div>
                                                         <div class="control-footer" style="justify-content:flex-end; margin-top:.5rem">
-                                                                <button id="continue-btn" class="terminal-button mt-2 hidden" onclick="handleStoryGeneration()">CONTINUE</button>
+                                                                <button id="continue-btn" class="terminal-button mt-2 hidden" onclick="handleStoryGeneration()">
+                                                                        <svg style="width:16px; height:16px; fill:currentColor" viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                                                                        CONTINUE STORY
+                                                                </button>
                                                         </div>
                                                 </div>
                                         </div>
 
-                                        <div id="staging-area" class="hidden terminal-card" style="border:1px solid rgba(255,200,100,0.04);">
-                                                <h3 style="color:#ffd98a; margin-bottom:.6rem">Visual Staging</h3>
-                                                <div id="progress-steps" class="progress-box hidden" style="margin-bottom:.6rem">
-                                                        <strong id="progress-step-label">1/2</strong>
-                                                        <span id="progress-message">Preparing...</span>
+                                        <div id="staging-area" class="hidden terminal-card" style="border:1px solid rgba(255,200,100,0.2); background: linear-gradient(135deg, rgba(255,200,100,0.03), rgba(255,200,100,0.01));">
+                                                <h3 style="color:var(--accent-soft); margin-bottom:1rem; font-size:var(--text-lg);">Visual Staging</h3>
+                                                <div id="progress-steps" class="progress-box hidden" style="margin-bottom:1rem">
+                                                        <div class="loading-spinner"></div>
+                                                        <div>
+                                                                <strong id="progress-step-label" style="color:var(--primary);">1/2</strong>
+                                                                <span id="progress-message" style="margin-left:0.5rem;">Preparing...</span>
+                                                        </div>
                                                 </div>
                                                 <label class="prompt-label">Generated Narrative</label>
-                                                <p id="staging-narrative" style="background:rgba(255,255,255,0.02); padding:.6rem; border-radius:8px; color:var(--muted)"></p>
-                                                <label class="prompt-label" for="image-prompt-editor">Visual Prompt</label>
-                                                <textarea id="image-prompt-editor" class="terminal-input" rows="4"></textarea>
-                                                <div style="display:flex; gap:.6rem; margin-top:.6rem">
-                                                        <button id="generate-image-btn" class="terminal-button" onclick="handleImageGeneration()">GENERATE IMAGE</button>
+                                                <div id="staging-narrative-container">
+                                                        <p id="staging-narrative"></p>
+                                                        <!-- Skeleton loader shown during generation -->
+                                                        <div id="narrative-skeleton" class="skeleton-narrative hidden">
+                                                                <div class="skeleton-line"></div>
+                                                                <div class="skeleton-line"></div>
+                                                                <div class="skeleton-line short"></div>
+                                                                <div class="skeleton-line"></div>
+                                                                <div class="skeleton-line short"></div>
+                                                        </div>
+                                                </div>
+                                                <label class="prompt-label" for="image-prompt-editor" style="margin-top:1rem;">Visual Prompt (Editable)</label>
+                                                <textarea id="image-prompt-editor" class="terminal-input" rows="4" placeholder="Edit the visual prompt before generating the image..."></textarea>
+                                                <div style="display:flex; gap:.75rem; margin-top:1rem">
+                                                        <button id="generate-image-btn" class="terminal-button" onclick="handleImageGeneration()" style="flex:1">
+                                                                <svg style="width:16px; height:16px; fill:currentColor" viewBox="0 0 24 24"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
+                                                                GENERATE IMAGE
+                                                        </button>
                                                         <button class="terminal-button-secondary" onclick="(function(){ stagingArea.classList.add('hidden'); storyControls.classList.remove('hidden'); })()">CANCEL</button>
                                                 </div>
                                         </div>
 
-                                        <div id="loading-indicator" class="hidden terminal-card" style="display:flex; align-items:center; gap:.6rem">
+                                        <div id="loading-indicator" class="hidden terminal-card" style="display:flex; align-items:center; gap:1rem">
                                                 <div class="loading-spinner"></div>
-                                                <span id="loading-message" style="color:var(--muted)">Processing...</span>
+                                                <span id="loading-message" style="color:var(--text-secondary); font-size:var(--text-sm);">Processing...</span>
                                         </div>
                                 </aside>
 
                                 <section class="right-column">
                                         <div id="summary-output" class="terminal-card summary-card">
-                                                <h3 style="color:var(--accent); margin-bottom:.6rem">Narrative Log</h3>
-                                                <ul id="summary-list" style="list-style:none; padding-left:0; color:var(--muted);"></ul>
+                                                <h3 style="color:var(--primary); margin-bottom:1rem; font-weight:700; font-size:var(--text-lg);">Story Timeline</h3>
+                                                <ul id="summary-list" style="list-style:none; padding-left:0; color:var(--text-secondary);"></ul>
                                         </div>
 
                                         <div id="storyboard" class="storyboard">
@@ -172,23 +896,22 @@
                                 </section>
                         </div>
                 </main>
-                </main>
         </div>
 
         <div id="modal-container" class="fixed inset-0 bg-gray-900/75 flex items-center justify-center z-50 hidden">
-                <div id="error-modal" class="terminal-card bg-red-900/70 border-red-500 max-w-lg p-6 space-y-4">
-                        <h3 class="text-2xl font-bold text-red-400">!! System Error !!</h3>
-                        <p id="error-message" class="text-red-300"></p>
-                        <button onclick="hideModal('error-modal');" class="terminal-button bg-red-600 hover:bg-red-500">ACK</button>
+                <div id="error-modal" class="terminal-card border-2 border-red-500 max-w-lg p-6 space-y-4" style="background: linear-gradient(135deg, rgba(220,38,38,0.15), rgba(220,38,38,0.05));">
+                        <h3 style="font-size:var(--text-xl); font-weight:700; color:#ff6b6b;">!! System Error !!</h3>
+                        <p id="error-message" style="color:var(--text-secondary);"></p>
+                        <button onclick="hideModal('error-modal');" class="terminal-button" style="background:linear-gradient(135deg,#dc2626,#b91c1c);">ACK</button>
                 </div>
-                <div id="success-modal" class="terminal-card bg-green-900/70 border-green-500 max-w-lg p-6 space-y-4 hidden">
-                        <h3 class="text-2xl font-bold text-green-400">✔ Success</h3>
-                        <p id="success-message" class="text-green-200"></p>
-                        <button onclick="hideSuccess();" class="terminal-button bg-green-600 hover:bg-green-500">OK</button>
+                <div id="success-modal" class="terminal-card border-2 border-green-500 max-w-lg p-6 space-y-4 hidden" style="background: linear-gradient(135deg, rgba(34,197,94,0.15), rgba(34,197,94,0.05));">
+                        <h3 style="font-size:var(--text-xl); font-weight:700; color:#00ff88;">✔ Success</h3>
+                        <p id="success-message" style="color:var(--text-secondary);"></p>
+                        <button onclick="hideSuccess();" class="terminal-button" style="background:linear-gradient(135deg,var(--primary),#00d9a3);">OK</button>
                 </div>
-                <div id="cache-modal" class="terminal-card bg-gray-900/80 border-cyan-700 max-w-3xl p-6 space-y-4 hidden">
+                <div id="cache-modal" class="terminal-card max-w-3xl p-6 space-y-4 hidden" style="border:1px solid rgba(0,255,136,0.2);">
                         <div class="flex items-center justify-between">
-                                <h3 class="text-2xl font-bold text-cyan-300">Image Cache</h3>
+                                <h3 style="font-size:var(--text-xl); font-weight:700; color:var(--primary);">Image Cache</h3>
                                 <div>
                                     <button onclick="hideCacheModal();" class="terminal-button-secondary">Close</button>
                                 </div>
@@ -199,6 +922,12 @@
                 </div>
         </div>
     
-        <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+        <footer class="site-footer">
+                <span class="copy-symbol">©</span>
+                <span class="footer-text">SHASHANK TOMAR</span>
+        </footer>
+    
+                <script src="{{ url_for('static', filename='js/firebase-init.js') }}?v=7"></script>
+        <script src="{{ url_for('static', filename='js/main.js') }}?v=7"></script>
 </body>
 </html>

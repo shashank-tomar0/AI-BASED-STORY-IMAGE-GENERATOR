@@ -14,6 +14,8 @@ let state = {
     token: localStorage.getItem('authToken') || null,
     userId: localStorage.getItem('userId') || null,
     username: localStorage.getItem('username') || null,
+    displayName: localStorage.getItem('displayName') || null,
+    avatar: localStorage.getItem('avatar') || null,
     storyHistory: [],
     sceneCounter: 0,
     scenes: [],
@@ -187,6 +189,18 @@ async function handleRegister() {
     const password = document.getElementById('auth-password').value;
     setLoading(true, 'Registering user...');
     try {
+        // Basic client-side validation to reduce round trips
+        if (!username || username.trim().length < 3) {
+            showModal('error-modal', 'Username must be at least 3 characters long.');
+            setLoading(false);
+            return;
+        }
+        if (!password || password.length < 6) {
+            showModal('error-modal', 'Password must be at least 6 characters long.');
+            setLoading(false);
+            return;
+        }
+
         const response = await fetchWithRetry(`${API_BASE_URL}/auth/register`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -210,6 +224,11 @@ async function handleLogin(usernameOverride, passwordOverride) {
     
     if (!username || !password) {
         showModal('error-modal', 'Please enter both username and password.');
+        return;
+    }
+
+    if (username.trim().length < 3) {
+        showModal('error-modal', 'Please provide a valid username.');
         return;
     }
 
@@ -243,6 +262,11 @@ async function handleLogout() {
     if (!state.token) return;
     setLoading(true, 'Logging out...');
     try {
+            // Sign out from Firebase if available
+            if (typeof signOutFirebase === 'function') {
+                await signOutFirebase();
+            }
+        
         // The backend handles token invalidation
         await fetchWithRetry(`${API_BASE_URL}/auth/logout`, { method: 'POST' });
     } catch (error) {
@@ -254,9 +278,13 @@ async function handleLogout() {
     localStorage.removeItem('authToken');
     localStorage.removeItem('userId');
     localStorage.removeItem('username');
+        localStorage.removeItem('displayName');
+        localStorage.removeItem('avatar');
     state.token = null;
     state.userId = null;
     state.username = null;
+        state.displayName = null;
+        state.avatar = null;
     
     // Reset UI to login state
     authInfo.innerHTML = '';
@@ -273,9 +301,15 @@ async function handleLogout() {
 
 function updateHeader() {
     if (state.token && state.username) {
+        // Show avatar and display name when available
+        const displayName = state.displayName || localStorage.getItem('displayName') || state.username;
+        const avatar = state.avatar || localStorage.getItem('avatar');
         authInfo.innerHTML = `
-            <span class="text-green-500 mr-4">User: ${state.username}</span>
-            <button onclick="handleLogout()" class="terminal-button-secondary py-1 px-2 text-sm">Sign Out</button>
+            <div style="display:flex; align-items:center; gap:10px">
+                ${avatar ? `<img src="${avatar}" alt="avatar" style="width:28px;height:28px;border-radius:999px;object-fit:cover;">` : ''}
+                <span class="text-green-500 mr-4">${displayName}</span>
+                <button onclick="handleLogout()" class="terminal-button-secondary py-1 px-2 text-sm">Sign Out</button>
+            </div>
         `;
     } else {
         authInfo.innerHTML = '';
@@ -339,6 +373,26 @@ function initializeApp() {
     }
 }
 
+// Bridge: update state when Firebase completes auth
+window.addEventListener('firebase-auth-success', (e) => {
+    const info = (e && e.detail) || {};
+    state.token = info.token || localStorage.getItem('authToken') || 'firebase-token-' + Date.now();
+    state.username = info.username || localStorage.getItem('username') || state.username || 'User';
+    state.displayName = info.displayName || localStorage.getItem('displayName') || state.displayName;
+    state.avatar = info.avatar || localStorage.getItem('avatar') || state.avatar;
+    state.userId = info.userId || localStorage.getItem('userId') || state.userId || 'firebase-user';
+    
+    localStorage.setItem('authToken', state.token);
+    localStorage.setItem('username', state.username);
+    localStorage.setItem('userId', state.userId);
+    if (state.displayName) localStorage.setItem('displayName', state.displayName);
+    if (state.avatar) localStorage.setItem('avatar', state.avatar);
+    
+    updateHeader();
+    initializeApp();
+    showSuccess('✓ Signed in with Google!');
+});
+
 // --- RUN INITIALIZATION ---
 window.onload = initializeApp;
 
@@ -384,6 +438,8 @@ async function saveStorySession() {
 // --- AI API CALLS VIA BACKEND ---
 
 async function generateStoryData(prompt, artStyle) {
+    console.log('generateStoryData called with prompt:', prompt);
+    
     const systemPrompt = `You are a creative narrative generator. Your task is to continue the story based on the context provided. The output MUST be a single, valid JSON object.
         1. 'narrative': A new paragraph continuing the story. Keep it focused on a single scene or moment.
         2. 'image_prompt': A single, highly detailed, descriptive visual prompt suitable for a text-to-image model (like Midjourney or Imagen) that captures the main action and atmosphere of the 'narrative' paragraph. The style should be included in the prompt, focusing on '${artStyle}'.
@@ -412,11 +468,13 @@ async function generateStoryData(prompt, artStyle) {
         }
     };
     
+    console.log('Sending request to backend...');
     const response = await fetchWithRetry(`${API_BASE_URL}/ai/generate-prompt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ payload: aiPayload })
     });
+    console.log('Received response from backend:', response);
 
     // Update provider banner with whether a real LLM was used for this
     // response (backend sets `used_real_llm` true/false when available).
@@ -435,14 +493,17 @@ async function generateStoryData(prompt, artStyle) {
     // avoids brittle client-side parsing when upstream LLMs wrap JSON in
     // markdown/code fences or add commentary.
     if (response?.normalized_candidate) {
+        console.log('Using normalized_candidate from backend');
         return response.normalized_candidate;
     }
 
     // The backend may still return the older Gemini-shaped response; fall
     // back to parsing the candidates parts as before.
+    console.log('Attempting to parse candidates structure');
     const jsonString = response?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!jsonString) {
-        throw new Error("LLM returned an empty or invalid content part.");
+        console.error('No valid content in response:', response);
+        throw new Error("LLM returned an empty or invalid content part. Please check your connection and try again.");
     }
     return JSON.parse(jsonString);
 }
@@ -648,17 +709,53 @@ async function handleStoryGeneration(prompt = 'Continue the story.') {
     showProgress(1,2,'Generating narrative and visual prompt...');
     
     try {
+        console.log('Generating story data for prompt:', prompt);
         const result = await generateStoryData(prompt, state.artStyle);
+        console.log('Received story data:', result);
         
         // --- PAUSE POINT 1: Prompt Staging ---
         state.currentSceneData = result;
         
-        // Show staging area and populate prompt
-        promptEditor.value = result.image_prompt;
-        document.getElementById('staging-narrative').textContent = result.narrative;
+        // Ensure we have valid data with fallbacks
+        const narrative = result.narrative || 'No narrative generated. Please try again.';
+        const imagePrompt = result.image_prompt || `${prompt} -- ${state.artStyle}`;
         
+        // Show staging area FIRST so user sees content immediately
         storyControls.classList.add('hidden');
         stagingArea.classList.remove('hidden');
+        
+        // Populate the staging area
+        promptEditor.value = imagePrompt;
+        document.getElementById('staging-narrative').textContent = narrative;
+        console.log('Staging area populated with narrative');
+
+        // Request a fast preview image to reduce perceived latency (non-blocking)
+        try {
+            const previewResp = await fetchWithRetry(`${API_BASE_URL}/ai/generate-preview`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ payload: { instances: [{ prompt: imagePrompt }] } })
+            });
+            if (previewResp && previewResp.predictions && previewResp.predictions[0]) {
+                const b64 = previewResp.predictions[0].bytesBase64Encoded;
+                const previewImg = document.getElementById('preview-image');
+                if (!previewImg) {
+                    const imgEl = document.createElement('img');
+                    imgEl.id = 'preview-image';
+                    imgEl.style.width = '100%';
+                    imgEl.style.height = '180px';
+                    imgEl.style.objectFit = 'cover';
+                    imgEl.src = `data:image/png;base64,${b64}`;
+                    const staging = document.getElementById('staging-area');
+                    if (staging) staging.insertBefore(imgEl, staging.firstChild);
+                } else {
+                    previewImg.src = `data:image/png;base64,${b64}`;
+                }
+            }
+        } catch (e) {
+            // Non-fatal: preview failed
+            console.debug('Preview generation failed', e);
+        }
 
         // Ensure user explicitly triggers image generation. Show the staging area
         // and focus the Generate button so they can review the prompt and click.
@@ -696,8 +793,9 @@ async function handleStoryGeneration(prompt = 'Continue the story.') {
 
 async function handleImageGeneration() {
     if (state.isGenerating || !state.currentSceneData) return;
-    // We'll generate up to 3 images sequentially and show each as a separate scene
-    setLoading(true, 'Generating up to 3 images (this may take some time)...');
+    // Use async background job to reduce perceived latency: enqueue a job,
+    // show the preview (already present), then poll for the full-res result.
+    setLoading(true, 'Enqueuing image generation job...');
     const customPrompt = promptEditor.value.trim();
     const artStyle = artStyleSelect.value;
 
@@ -707,22 +805,74 @@ async function handleImageGeneration() {
         return;
     }
 
-    try {
-        const desiredCount = 3; // generate up to 3 images
-        // Request multiple images in one call when the backend supports it
-        const base64List = await generateImage(customPrompt, artStyle, desiredCount);
+    // Helper: enqueue async job
+    async function enqueueAsyncJob(payload) {
+        const resp = await fetchWithRetry(`${API_BASE_URL}/ai/generate-image-async`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ payload })
+        });
+        return resp && resp.job_id;
+    }
 
-        if (!Array.isArray(base64List) || base64List.length === 0) {
-            throw new Error('No images returned from provider.');
+    // Helper: poll job status until done/error or timeout
+    async function pollJob(jobId, interval = 2000, timeout = 120000) {
+        const start = Date.now();
+        while (Date.now() - start < timeout) {
+            try {
+                const j = await fetchWithRetry(`${API_BASE_URL}/ai/generate-image-job/${jobId}`, { method: 'GET' });
+                if (!j) {
+                    await new Promise(r => setTimeout(r, interval));
+                    continue;
+                }
+                if (j.status === 'done') return j.result;
+                if (j.status === 'error') throw new Error(j.result?.error || 'Async job failed');
+            } catch (e) {
+                // Continue polling unless timeout reached; break on unauthorized
+                if (e.message && e.message.toLowerCase().includes('unauthorized')) throw e;
+            }
+            await new Promise(r => setTimeout(r, interval));
+        }
+        throw new Error('Image generation timed out. Try again or generate fewer images.');
+    }
+
+    try {
+        // Build payload similar to synchronous call (ask for up to 3 samples)
+        const desiredCount = 3;
+        const aiPayload = {
+            instances: [{ prompt: `${customPrompt}, in the style of ${artStyle}` }],
+            parameters: { sampleCount: desiredCount, aspectRatio: '16:9' }
+        };
+
+        // Enqueue background job
+        const jobId = await enqueueAsyncJob(aiPayload);
+        if (!jobId) throw new Error('Failed to enqueue image job');
+
+        showProgress(0, 1, 'Image job queued — awaiting full-resolution result...');
+
+        // Poll for completion. If it succeeds, job.result should include file_urls
+        let result = null;
+        try {
+            result = await pollJob(jobId, 2000, 120000);
+        } catch (pollErr) {
+            // If polling fails (timeout or error), fall back to synchronous generation
+            console.debug('Async poll failed or timed out, falling back to synchronous generation:', pollErr);
+            // Attempt a synchronous fallback to avoid leaving the user without images
+            const base64List = await generateImage(customPrompt, artStyle, desiredCount);
+            result = { files: [], file_urls: [] };
+            if (Array.isArray(base64List) && base64List.length) {
+                // convert returned base64 images to data URLs in file_urls for rendering
+                result.file_urls = base64List.map(b64 => `data:image/png;base64,${b64}`);
+            }
         }
 
-        // For each returned image, create a new scene entry
-        for (let i = 0; i < base64List.length; i++) {
-            const imgB64 = base64List[i];
-            // Update progress UI for each image
-            showProgress(i + 1, base64List.length, `Rendering image ${i + 1} of ${base64List.length}...`);
+        // If result has file_urls, render them as scenes
+        const fileUrls = result?.file_urls || [];
+        if (!fileUrls.length) throw new Error('No images available from async job or fallback.');
 
-            const imageUrl = `data:image/png;base64,${imgB64}`;
+        for (let i = 0; i < fileUrls.length; i++) {
+            showProgress(i + 1, fileUrls.length, `Rendering image ${i + 1} of ${fileUrls.length}...`);
+            const imageUrl = fileUrls[i];
             state.sceneCounter++;
             const newScene = {
                 id: state.sceneCounter,
@@ -733,24 +883,18 @@ async function handleImageGeneration() {
                 artStyle: artStyle,
             };
 
-            // Update State: push narrative once for each image to preserve chronological history
             state.storyHistory.push(newScene.narrative);
             state.summaryBullets.push(newScene.summaryPoint);
             state.scenes.unshift(newScene);
-
-            // Render incremental scenes so user sees images appear as they arrive
             renderScene(newScene);
         }
 
-        // Clear staging data after all images generated
         state.currentSceneData = null;
-
-        // Save session once (after all images)
         await saveStorySession();
         renderUIFromState();
 
     } catch (error) {
-        showModal('error-modal', `Image generation failed. Please revise the Visual Prompt and try again. Error: ${error.message}`);
+        showModal('error-modal', `Image generation failed. ${error.message}`);
     } finally {
         setLoading(false);
         stagingArea.classList.add('hidden');

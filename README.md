@@ -29,7 +29,10 @@ Important env options (you can set them in the terminal or in `.env`):
 - IMAGE_PROVIDER: `google` (Imagen), `stability` (Stability.ai), `local_auto` (AUTOMATIC1111), or `free` (Picsum placeholder)
 - USE_MOCK_FALLBACK: `False` to force provider errors to surface; `True` to fallback to mock LLM
 - USE_IMAGE_FALLBACK: `False` to let image API errors surface; `True` to return a tiny placeholder
- - IMAGE_CACHE_TTL_SECONDS: how long (in seconds) generated images are kept in the local disk cache (default: 86400 = 24 hours). Set this to 0 to disable TTL-based expiration.
+- IMAGE_CACHE_TTL_SECONDS: how long (in seconds) generated images are kept in the local disk cache (default: 86400 = 24 hours). Set this to 0 to disable TTL-based expiration.
+- GOOGLE_CLIENT_ID: Google OAuth Client ID for "Sign in with Google" (optional, see [SETUP_GOOGLE_OAUTH.md](SETUP_GOOGLE_OAUTH.md))
+- GOOGLE_CLIENT_SECRET: Google OAuth Client Secret (optional)
+- GOOGLE_OAUTH_REDIRECT: OAuth callback URL (default: http://127.0.0.1:5000/api/auth/google/callback)
 
 Run the app (examples):
 - Use real Gemini LLM and Picsum for free images (recommended workflow):
@@ -156,7 +159,7 @@ location.reload()
 Want me to add this section to the README and push it? I can commit to `main` or create a branch + PR if you prefer.
 
 ````
-Story Generator - Local Development
+ Story Generator - Local Development
 
 This project is a small Flask app that uses an LLM to produce narrative + visual prompts and then generates images. For local development we provide a free Picsum image fallback so you can iterate quickly without paying for image APIs.
 
