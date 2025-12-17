@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2025 shashank-tomar0
+Copyright (c) 2025 Shashank Tomar
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,3 +19,42 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+## Third-Party Licenses
+
+This project uses the following third-party libraries and services:
+
+### Python Libraries
+- Flask: BSD 3-Clause License
+- google-generativeai: Apache License 2.0
+- requests: Apache License 2.0
+- python-dotenv: BSD License
+- firebase-admin: Apache License 2.0
+
+### External APIs
+- Groq API: https://groq.com/
+- Stability AI: https://stability.ai/
+- Google Gemini: https://ai.google.dev/
+- OpenAI: https://openai.com/
+- Anthropic: https://www.anthropic.com/
+- Firebase: https://firebase.google.com/
+- Picsum Photos: https://picsum.photos/
+
+### UI Framework
+- Tailwind CSS: MIT License
+- JetBrains Mono Font: Apache License 2.0
+
+### Resources
+- Icons and graphics are used for demonstration purposes
+- Project respects all applicable licenses and terms of service
+
+For complete license information, please see the respective project repositories.
+
+---
+
+**Project**: StoryCanvas - AI Narrative & Image Generator
+**Author**: Shashank Tomar
+**Version**: 1.0.0
+**Release Date**: December 2025
