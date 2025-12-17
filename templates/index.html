@@ -149,6 +149,32 @@
                         transform: translateY(-2px);
                 }
                 
+                #art-style:focus {
+                        border-color: var(--accent-soft);
+                        background: linear-gradient(135deg, rgba(255,200,100,0.12), rgba(255,200,100,0.05));
+                        box-shadow: 0 0 0 4px rgba(255,200,100,0.2), 
+                                    0 6px 20px rgba(255,200,100,0.3),
+                                    inset 0 1px 0 rgba(255,255,255,0.08);
+                        transform: translateY(-2px);
+                }
+                
+                /* Style dropdown options */
+                #art-style option {
+                        background: var(--surface-elevated);
+                        color: var(--text-primary);
+                        padding: 8px 12px;
+                }
+                
+                #art-style option:hover {
+                        background: var(--surface);
+                        color: var(--accent-soft);
+                }
+                
+                #art-style option:checked {
+                        background: linear-gradient(rgba(255,200,100,0.2), rgba(255,200,100,0.2));
+                        color: var(--accent-soft);
+                }
+                
                 .terminal-input::placeholder {
                         color: var(--text-tertiary);
                 }
@@ -317,6 +343,29 @@
                         transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
                         position: relative;
                 }
+                /* Image wrapper with sticky download button */
+                .scene-image-wrapper { position: relative; }
+                .download-btn {
+                        position: absolute;
+                        top: 8px;
+                        right: 8px;
+                        width: 36px;
+                        height: 36px;
+                        border-radius: 10px;
+                        border: 1px solid rgba(255,255,255,0.18);
+                        background: rgba(10,14,26,0.65);
+                        color: var(--primary);
+                        font-weight: 900;
+                        line-height: 1;
+                        display: inline-flex;
+                        align-items: center;
+                        justify-content: center;
+                        box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+                        cursor: pointer;
+                        backdrop-filter: blur(6px);
+                        transition: transform .15s ease, box-shadow .2s ease, background .2s ease;
+                }
+                .download-btn:hover { transform: translateY(-1px); background: rgba(10,14,26,0.8); box-shadow: 0 10px 26px rgba(0,0,0,0.5); }
                 
                 .scene-card::after {
                         content: '';
@@ -822,13 +871,13 @@
                                                 <h3 style="color:var(--primary); margin-bottom:1rem; font-size:var(--text-lg);">Story Generation</h3>
                                                 <div id="new-story-inputs" style="display:flex; flex-direction:column; gap:.75rem">
                                                         <textarea id="start-prompt" class="terminal-input" rows="5" placeholder="Enter your initial story idea or context (e.g., 'A rogue AI escapes its facility and tries to learn human emotion')." style="resize:vertical; min-height:120px;"></textarea>
-                                                        <label class="prompt-label">Visual Style</label>
-                                                        <select id="art-style" class="terminal-select">
-                                                                <option value="photorealistic cinematic">Photorealistic Cinematic</option>
-                                                                <option value="cyberpunk painting">Cyberpunk Digital Painting</option>
-                                                                <option value="watercolor illustration">Watercolor Illustration</option>
-                                                                <option value="pencil sketch">Detailed Pencil Sketch</option>
-                                                                <option value="voxel art">Voxel Art</option>
+                                                        <label class="prompt-label" style="color:var(--accent-soft); font-weight:600;">📸 Visual Style</label>
+                                                        <select id="art-style" class="terminal-select" style="border-color:rgba(255,200,100,0.3); background:linear-gradient(135deg, rgba(255,200,100,0.05), rgba(255,200,100,0.02));">
+                                                                <option value="photorealistic cinematic">🎬 Photorealistic Cinematic</option>
+                                                                <option value="cyberpunk painting">🤖 Cyberpunk Digital Painting</option>
+                                                                <option value="watercolor illustration">🎨 Watercolor Illustration</option>
+                                                                <option value="pencil sketch">✏️ Detailed Pencil Sketch</option>
+                                                                <option value="voxel art">🎮 Voxel Art</option>
                                                         </select>
                                                         <div class="control-footer">
                                                                 <button id="start-btn" class="terminal-button" onclick="handleInitialGeneration()">

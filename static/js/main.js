@@ -23,6 +23,7 @@ let state = {
     initialPrompt: '',
     artStyle: 'photorealistic cinematic',
     currentSceneData: null, // Holds LLM output while user edits prompt
+    pendingSceneId: null,   // If a narration is posted before image generation
     isGenerating: false
 };
 
@@ -139,7 +140,14 @@ async function fetchWithRetry(url, options = {}, retries = MAX_RETRIES) {
 
     for (let i = 0; i < retries; i++) {
         try {
-            const response = await fetch(url, options);
+            // Add client-side timeout: 12 seconds for story generation, 20 for images
+            const isStoryEndpoint = url.includes('/ai/generate-prompt');
+            const timeoutMs = isStoryEndpoint ? 12000 : 20000;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+            
+            const response = await fetch(url, { ...options, signal: controller.signal });
+            clearTimeout(timeoutId);
             
             if (response.status === 401) {
                 // Unauthorized: force logout. If this was a background/silent
@@ -160,7 +168,8 @@ async function fetchWithRetry(url, options = {}, retries = MAX_RETRIES) {
                 let errorMsg = `HTTP Error ${response.status}`;
                 try {
                     const json = JSON.parse(text);
-                    errorMsg = json.error || errorMsg;
+                    const candidate = json?.error || json?.message || json;
+                    errorMsg = typeof candidate === 'string' ? candidate : JSON.stringify(candidate);
                 } catch (e) {
                     errorMsg = text || errorMsg;
                 }
@@ -450,29 +459,29 @@ async function saveStorySession() {
 async function generateStoryData(prompt, artStyle) {
     console.log('generateStoryData called with prompt:', prompt);
     
-    const systemPrompt = `You are an expert narrative and visual storyteller. Create immersive, cinematic story moments. Output MUST be valid JSON with these fields:
+    const systemPrompt = `You are an expert narrative and visual storyteller. When given a user's idea, first generate an immersive, cinematic story from that idea, then create a detailed image prompt from the story you generated. Output MUST be valid JSON with these fields:
 
-1. 'narrative': Vivid 150-200 word paragraph with:
+1. 'narrative': Vivid 150-200 word story paragraph generated from the user's idea with:
    - Sensory details (sight, sound, touch, smell, taste)
    - Clear characters/robots with physical descriptions
    - Dynamic action showing tension and movement
    - Cinematic pacing and descriptive language
    - Meaningful plot advancement
 
-2. 'image_prompt': Highly detailed visual instruction (100-150 words):
-   - SPECIFIC visual elements from narrative (exact robot descriptions, clothing, features)
+2. 'image_prompt': Highly detailed visual instruction (100-150 words) generated from YOUR story narrative:
+   - SPECIFIC visual elements from YOUR narrative (exact robot descriptions, clothing, features)
    - Camera angle, lighting, composition details
    - Environmental and atmospheric specifics
    - Art style: ${artStyle}
-   - MUST perfectly match narrative characters and action
+   - MUST perfectly match YOUR narrative characters and action
    - Use descriptive adjectives: dramatic, cinematic, photorealistic, detailed
 
-3. 'summary_point': One concise sentence (max 20 words) of the scene's key event.`;
+3. 'summary_point': One concise sentence (max 20 words) of the scene's key event from YOUR story.`;
 
     const contents = [{ 
         role: "user", 
         parts: [{ 
-            text: `STORY CONTEXT (previous ${state.storyHistory.length} scenes):\n${state.storyHistory.map((s, i) => `Scene ${i+1}: ${s}`).join('\n\n')}\n\nPROMPT FOR NEXT SCENE: ${prompt}\n\nCREATE A VIVID, CINEMATIC SCENE:\n- Build on established narrative and characters\n- Maintain character consistency with physical descriptions\n- Include sensory details that translate to compelling visuals\n- Ensure image prompt will show exactly what narrative describes\n- Make scene dramatic and visually striking`
+            text: `Story context (last ${state.storyHistory.length} scenes): [${state.storyHistory.map(s => `"${s}"`).join(', ')}]\n\nContinue the story from this point, focusing on the next action or setting change. Prompt: ${prompt}`
         }] 
     }];
 
@@ -598,21 +607,30 @@ async function generateImage(prompt, artStyle, count = 1) {
 // --- SCENE RENDERING ---
 
 function renderScene(scene) {
+    const hasImage = !!scene.imageUrl;
+    const imageBlock = hasImage ? `
+                <div class="scene-image-wrapper">
+                    <img id="scene-img-${scene.id}" src="${scene.imageUrl}" alt="Scene ${scene.id} Visual" class="w-full rounded-lg shadow-xl border border-cyan-500/50" style="height:220px; object-fit:cover;">
+                    <button class="download-btn" title="Download image" onclick="downloadImage(${scene.id})">⇩</button>
+                </div>
+            ` : `
+                <div id="scene-placeholder-${scene.id}" class="w-full h-[220px] rounded-lg border border-cyan-500/40 flex items-center justify-center text-green-200 bg-gray-900/50">
+                    Image pending — generate when ready
+                </div>
+            `;
+
     const sceneHtml = `
         <div id="scene-${scene.id}" class="scene-card">
             <h3 class="text-xl font-bold text-cyan-400 mb-3">Scene ${scene.id}: ${scene.artStyle}</h3>
             
             <div class="mb-4">
-                <img id="scene-img-${scene.id}" src="${scene.imageUrl}" alt="Scene ${scene.id} Visual" class="w-full rounded-lg shadow-xl border border-cyan-500/50" style="height:220px; object-fit:cover;">
+                ${imageBlock}
             </div>
 
             <p class="text-green-200 mb-2">${scene.narrative}</p>
             <div class="text-sm mt-3 border-t border-green-500/30 pt-3">
                 <p class="prompt-label">VISUAL PROMPT USED:</p>
                 <code class="block text-xs bg-gray-700 p-2 rounded">${scene.imagePrompt}</code>
-                <div class="mt-2">
-                    <button class="terminal-button-secondary py-1 px-2 text-sm" onclick="downloadImage(${scene.id})">Download Image</button>
-                </div>
             </div>
         </div>
     `;
@@ -668,6 +686,28 @@ function renderSummary() {
         .join('');
 
     summaryList.innerHTML = `${narrativesHtml}<ul style="list-style:none; padding-left:0;">${bulletsHtml}</ul>`;
+}
+
+// Update an existing scene's image in the DOM when it becomes available
+function updateSceneImage(sceneId, imageUrl) {
+    try {
+        const imgId = `scene-img-${sceneId}`;
+        let img = document.getElementById(imgId);
+        const placeholder = document.getElementById(`scene-placeholder-${sceneId}`);
+        if (!img) {
+            img = document.createElement('img');
+            img.id = imgId;
+            img.className = 'w-full rounded-lg shadow-xl border border-cyan-500/50';
+            img.style.height = '220px';
+            img.style.objectFit = 'cover';
+            if (placeholder && placeholder.parentElement) {
+                placeholder.parentElement.replaceChild(img, placeholder);
+            }
+        }
+        img.src = imageUrl;
+    } catch (e) {
+        console.debug('Failed to update scene image', e);
+    }
 }
 
 // Small helper to escape HTML when injecting text into the DOM
@@ -745,95 +785,96 @@ async function handleInitialGeneration() {
     state.summaryBullets = [];
     
     // Start the LLM-driven continuation pipeline (show staging for user review)
-    await handleStoryGeneration(`Start a new story about: ${state.initialPrompt}`);
+    await handleStoryGeneration(`Generate a story from this idea: ${state.initialPrompt}`);
 }
 
 
 async function handleStoryGeneration(prompt = 'Continue the story.') {
     if (state.isGenerating) return;
-    setLoading(true, '1/2. Generating narrative and visual prompt...');
-    showProgress(1,2,'Generating narrative and visual prompt...');
+    setLoading(true, 'Generating narrative...');
+    showProgress(1,2,'Generating narrative...');
     
     try {
         console.log('Generating story data for prompt:', prompt);
         const result = await generateStoryData(prompt, state.artStyle);
         console.log('Received story data:', result);
         
-        // --- PAUSE POINT 1: Prompt Staging ---
-        state.currentSceneData = result;
-        
         // Ensure we have valid data with fallbacks
         const narrative = result.narrative || 'No narrative generated. Please try again.';
         const imagePrompt = result.image_prompt || `${prompt} -- ${state.artStyle}`;
+        const summaryPoint = result.summary_point || narrative.slice(0,140);
+
+        // Store in staging area for user review - DON'T add to story history yet
+        state.currentSceneData = { 
+            narrative, 
+            image_prompt: imagePrompt, 
+            summary_point: summaryPoint 
+        };
         
-        // Show staging area FIRST so user sees content immediately
-        storyControls.classList.add('hidden');
+        // Show in staging area for review and editing
+        const narrativeDisplay = document.getElementById('staging-narrative');
+        const promptEditor = document.getElementById('image-prompt-editor');
+        
+        if (narrativeDisplay) narrativeDisplay.textContent = narrative;
+        if (promptEditor) promptEditor.value = imagePrompt;
+        
+        // Show staging area, hide story controls
         stagingArea.classList.remove('hidden');
+        storyControls.classList.add('hidden');
         
-        // Populate the staging area
-        promptEditor.value = imagePrompt;
-        document.getElementById('staging-narrative').textContent = narrative;
-        console.log('Staging area populated with narrative');
-
-        // Request a fast preview image to reduce perceived latency (non-blocking)
-        try {
-            const previewResp = await fetchWithRetry(`${API_BASE_URL}/ai/generate-preview`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ payload: { instances: [{ prompt: imagePrompt }] } })
-            });
-            if (previewResp && previewResp.predictions && previewResp.predictions[0]) {
-                const b64 = previewResp.predictions[0].bytesBase64Encoded;
-                const previewImg = document.getElementById('preview-image');
-                if (!previewImg) {
-                    const imgEl = document.createElement('img');
-                    imgEl.id = 'preview-image';
-                    imgEl.style.width = '100%';
-                    imgEl.style.height = '180px';
-                    imgEl.style.objectFit = 'cover';
-                    imgEl.src = `data:image/png;base64,${b64}`;
-                    const staging = document.getElementById('staging-area');
-                    if (staging) staging.insertBefore(imgEl, staging.firstChild);
-                } else {
-                    previewImg.src = `data:image/png;base64,${b64}`;
-                }
-            }
-        } catch (e) {
-            // Non-fatal: preview failed
-            console.debug('Preview generation failed', e);
-        }
-
-        // Ensure user explicitly triggers image generation. Show the staging area
-        // and focus the Generate button so they can review the prompt and click.
-        const genBtn = document.getElementById('generate-image-btn');
-        if (genBtn) {
-            genBtn.disabled = false;
-            try { genBtn.focus(); } catch(e) {}
-        }
-
-        // AUTO-GENERATE: Controlled by a localStorage flag so users can choose
-        // whether images should be generated automatically after the LLM
-        // produces the visual prompt. Default is OFF for manual review.
-        try {
-            const autoGen = localStorage.getItem('AUTO_GENERATE_IMAGE') === 'true';
-            if (autoGen) {
-                // Short delay to allow the staging UI to render so the user can
-                // briefly view the narrative before the image job starts.
-                setTimeout(() => { handleImageGeneration(); }, 250);
-            }
-        } catch (e) {
-            // If localStorage isn't available or an error occurs, do not auto-generate.
-            console.debug('AUTO_GENERATE_IMAGE check failed, skipping auto-generate:', e);
-        }
-
+        console.log('✓ Narration ready in staging area. User can now review and edit visual prompt.');
+        
     } catch (error) {
-        showModal('error-modal', `An error occurred during narrative generation: ${error.message}`);
-        // Re-enable controls if generation fails
-        renderStoryControls();
+        console.error('Story generation error:', error);
     } finally {
         setLoading(false);
         hideProgress();
     }
+}
+
+// Post the generated narration to the storyboard before generating the image.
+// This lets the user see the story text immediately while keeping image generation optional.
+async function handlePostNarration() {
+    if (!state.currentSceneData) {
+        showModal('error-modal', 'No narration to post yet. Generate a story first.');
+        return;
+    }
+
+    const narrative = state.currentSceneData.narrative || 'Narrative pending.';
+    const imagePrompt = state.currentSceneData.image_prompt || (promptEditor ? promptEditor.value : '');
+    const summaryPoint = state.currentSceneData.summary_point || narrative.slice(0, 120);
+
+    state.sceneCounter++;
+    const newScene = {
+        id: state.sceneCounter,
+        narrative,
+        imagePrompt,
+        imageUrl: null,
+        summaryPoint,
+        artStyle: state.artStyle,
+    };
+
+    // Track this scene so we can attach the image once generated.
+    state.pendingSceneId = newScene.id;
+
+    // Update state collections
+    state.storyHistory.push(newScene.narrative);
+    state.summaryBullets.push(newScene.summaryPoint);
+    state.scenes.unshift(newScene);
+
+    // Render immediately
+    renderScene(newScene);
+    renderSummary();
+
+    try {
+        await saveStorySession();
+    } catch (e) {
+        console.debug('Post narration save failed:', e);
+    }
+
+    // Keep staging area visible so user can still generate the image
+    const genBtn = document.getElementById('generate-image-btn');
+    if (genBtn) genBtn.disabled = false;
 }
 
 
@@ -883,8 +924,9 @@ async function handleImageGeneration() {
     }
 
     try {
-        // Build payload similar to synchronous call (ask for up to 3 samples)
-        const desiredCount = 3;
+        // Build payload similar to synchronous call. If we have a pending scene
+        // (narration already posted), request just 1 image to attach to it.
+        const desiredCount = state.pendingSceneId ? 1 : 3;
         const aiPayload = {
             instances: [{ prompt: `${customPrompt}, in the style of ${artStyle}` }],
             parameters: { sampleCount: desiredCount, aspectRatio: '16:9' }
@@ -916,28 +958,46 @@ async function handleImageGeneration() {
         const fileUrls = result?.file_urls || [];
         if (!fileUrls.length) throw new Error('No images available from async job or fallback.');
 
-        for (let i = 0; i < fileUrls.length; i++) {
-            showProgress(i + 1, fileUrls.length, `Rendering image ${i + 1} of ${fileUrls.length}...`);
-            const imageUrl = fileUrls[i];
-            state.sceneCounter++;
-            const newScene = {
-                id: state.sceneCounter,
-                narrative: state.currentSceneData.narrative,
-                imagePrompt: customPrompt,
-                imageUrl: imageUrl,
-                summaryPoint: state.currentSceneData.summary_point,
-                artStyle: artStyle,
-            };
+        // If a narration was already posted, attach the first image to that scene.
+        if (state.pendingSceneId) {
+            const targetId = state.pendingSceneId;
+            const targetIndex = state.scenes.findIndex(s => s.id === targetId);
+            if (targetIndex !== -1) {
+                const updated = { ...state.scenes[targetIndex] };
+                updated.imageUrl = fileUrls[0];
+                updated.imagePrompt = customPrompt;
+                updated.summaryPoint = state.currentSceneData?.summary_point || updated.summaryPoint;
+                updated.narrative = state.currentSceneData?.narrative || updated.narrative;
+                state.scenes[targetIndex] = updated;
+            }
+            state.pendingSceneId = null;
+            state.currentSceneData = null;
+            await saveStorySession();
+            renderUIFromState();
+        } else {
+            for (let i = 0; i < fileUrls.length; i++) {
+                showProgress(i + 1, fileUrls.length, `Rendering image ${i + 1} of ${fileUrls.length}...`);
+                const imageUrl = fileUrls[i];
+                state.sceneCounter++;
+                const newScene = {
+                    id: state.sceneCounter,
+                    narrative: state.currentSceneData.narrative,
+                    imagePrompt: customPrompt,
+                    imageUrl: imageUrl,
+                    summaryPoint: state.currentSceneData.summary_point,
+                    artStyle: artStyle,
+                };
 
-            state.storyHistory.push(newScene.narrative);
-            state.summaryBullets.push(newScene.summaryPoint);
-            state.scenes.unshift(newScene);
-            renderScene(newScene);
+                state.storyHistory.push(newScene.narrative);
+                state.summaryBullets.push(newScene.summaryPoint);
+                state.scenes.unshift(newScene);
+                renderScene(newScene);
+            }
+
+            state.currentSceneData = null;
+            await saveStorySession();
+            renderUIFromState();
         }
-
-        state.currentSceneData = null;
-        await saveStorySession();
-        renderUIFromState();
 
     } catch (error) {
         showModal('error-modal', `Image generation failed. ${error.message}`);
@@ -947,6 +1007,27 @@ async function handleImageGeneration() {
         storyControls.classList.remove('hidden');
         renderStoryControls();
         hideProgress();
+    }
+}
+
+// Generate an image for a specific scene (used when we already showed the narrative)
+async function generateImageForScene(sceneId, prompt, artStyle) {
+    setLoading(true, 'Generating image...');
+    try {
+        const base64List = await generateImage(prompt, artStyle, 1);
+        const imageUrl = `data:image/png;base64,${base64List[0]}`;
+
+        // Update state
+        const scene = state.scenes.find(s => s.id === sceneId);
+        if (scene) {
+            scene.imageUrl = imageUrl;
+            scene.pending = false;
+        }
+        updateSceneImage(sceneId, imageUrl);
+    } catch (err) {
+        showModal('error-modal', `Image generation failed: ${err.message}`);
+    } finally {
+        setLoading(false);
     }
 }
 
@@ -968,17 +1049,25 @@ async function handleGenerateImageFromIdea() {
     showProgress(1,1,'Generating image from idea...');
 
     try {
-    const base64List = await generateImage(idea, artStyle, 1);
-    const imageUrl = `data:image/png;base64,${base64List[0]}`;
+        // First, ask the LLM to craft a narrative + visual prompt from the raw idea.
+        // This ensures the displayed story text matches the generated image.
+        const storyData = await generateStoryData(`Generate a story from this idea: ${idea}`, artStyle);
+        const narrative = storyData?.narrative || `Image generated from idea: ${idea}`;
+        const imagePrompt = storyData?.image_prompt || `${idea}, in the style of ${artStyle}`;
+        const summaryPoint = storyData?.summary_point || `Visualized idea: ${idea}`;
 
-        // Create a simple narrative for this scene referencing the idea.
+        // Then, generate the image using the refined visual prompt.
+        const base64List = await generateImage(imagePrompt, artStyle, 1);
+        const imageUrl = `data:image/png;base64,${base64List[0]}`;
+
+        // Build the scene with the LLM narrative and refined prompt.
         state.sceneCounter++;
         const newScene = {
             id: state.sceneCounter,
-            narrative: `Image generated from idea: ${idea}`,
-            imagePrompt: idea,
+            narrative: narrative,
+            imagePrompt: imagePrompt,
             imageUrl: imageUrl,
-            summaryPoint: `Visualized idea: ${idea}`,
+            summaryPoint: summaryPoint,
             artStyle: artStyle,
         };
 

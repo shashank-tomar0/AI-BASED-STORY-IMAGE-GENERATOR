@@ -9,9 +9,34 @@ import os
 import threading
 from flask import Blueprint, request, jsonify, current_app
 from auth import token_required
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Create a Blueprint for AI routes
 ai_bp = Blueprint('ai', __name__, url_prefix='/api/ai')
+
+# Create a session with connection pooling and retry strategy for faster API calls
+def _create_requests_session():
+    """Create a requests session with connection pooling and retries."""
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=0,  # Don't retry at session level, we handle retries manually
+        backoff_factor=0,
+        status_forcelist=[]
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=10)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+_session = None
+
+def _get_session():
+    """Get or create the global requests session."""
+    global _session
+    if _session is None:
+        _session = _create_requests_session()
+    return _session
 
 # Simple in-memory job store for dev async image generation
 JOBS = {}  # job_id -> { status: 'pending'|'done'|'error', result: {...} }
@@ -37,6 +62,22 @@ def _save_image_b64(b64, prompt_text=None):
     except Exception:
         # If saving fails, don't block the response — just return None
         return None
+
+
+def _picsum_base64_from_prompt(prompt_text: str, width: int = 800, height: int = 450, timeout: int = 20):
+    """Return a deterministic Picsum image as base64 for a prompt.
+    Uses a short SHA1 seed so the same prompt yields the same image.
+    Returns None on failure.
+    """
+    try:
+        seed = hashlib.sha1((prompt_text or 'seed').encode('utf-8')).hexdigest()[:8]
+        url = f'https://picsum.photos/seed/{seed}/{width}/{height}'
+        resp = requests.get(url, timeout=timeout)
+        if resp.status_code == 200:
+            return base64.b64encode(resp.content).decode('utf-8')
+    except Exception:
+        return None
+    return None
 
 
 def _extract_prompt_from_payload(payload):
@@ -161,6 +202,195 @@ def _synthesize_narrative(prompt_text, paragraphs=3):
     except Exception:
         return prompt_text
 
+
+def _extract_user_prompt(payload):
+    """Extract the user's prompt text from Gemini-style payload."""
+    try:
+        contents = payload.get('contents', [])
+        if contents and isinstance(contents, list):
+            for content in contents:
+                if isinstance(content, dict):
+                    parts = content.get('parts', [])
+                    if parts and isinstance(parts, list):
+                        for part in parts:
+                            if isinstance(part, dict) and 'text' in part:
+                                return part['text']
+        return "Continue the story"
+    except:
+        return "Continue the story"
+
+
+def _call_groq_llm(payload):
+    """Call Groq API for fast, free LLM inference."""
+    try:
+        from flask import current_app, jsonify
+        
+        GROQ_API_KEY = current_app.config.get('GROQ_API_KEY')
+        if not GROQ_API_KEY:
+            return jsonify({'error': 'GROQ_API_KEY not configured'}), 500
+        
+        # Extract prompt from Gemini-style payload
+        user_prompt = _extract_user_prompt(payload)
+        system_instruction = payload.get('systemInstruction', {}).get('parts', [{}])[0].get('text', '')
+        
+        # Groq API (OpenAI-compatible)
+        groq_payload = {
+            "model": "llama-3.3-70b-versatile",  # Fast, free model
+            "messages": [
+                {"role": "system", "content": system_instruction or "You are a creative storyteller."},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.8,
+            "response_format": {"type": "json_object"}
+        }
+        
+        print(f"[GROQ] Calling Groq API...")
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+            json=groq_payload,
+            timeout=15
+        )
+        response.raise_for_status()
+        
+        data = response.json()
+        content = data['choices'][0]['message']['content']
+        narrative_data = json.loads(content)
+        
+        # Convert to Gemini-style response
+        normalized = {
+            'narrative': narrative_data.get('narrative', ''),
+            'image_prompt': narrative_data.get('image_prompt', ''),
+            'summary_point': narrative_data.get('summary_point', '')
+        }
+        
+        return jsonify({
+            'candidates': [{'content': {'parts': [{'text': json.dumps(normalized)}]}}],
+            'normalized_candidate': normalized,
+            'used_real_llm': True
+        }), 200
+        
+    except Exception as e:
+        print(f"[GROQ ERROR] {str(e)}")
+        return jsonify({'error': f'Groq API error: {str(e)}'}), 500
+
+
+def _call_openai_llm(payload):
+    """Call OpenAI API (GPT models)."""
+    try:
+        from flask import current_app, jsonify
+        
+        OPENAI_API_KEY = current_app.config.get('OPENAI_API_KEY')
+        if not OPENAI_API_KEY:
+            return jsonify({'error': 'OPENAI_API_KEY not configured'}), 500
+        
+        user_prompt = _extract_user_prompt(payload)
+        system_instruction = payload.get('systemInstruction', {}).get('parts', [{}])[0].get('text', '')
+        
+        openai_payload = {
+            "model": "gpt-3.5-turbo",  # or "gpt-4" if you have access
+            "messages": [
+                {"role": "system", "content": system_instruction or "You are a creative storyteller."},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.8,
+            "response_format": {"type": "json_object"}
+        }
+        
+        print(f"[OPENAI] Calling OpenAI API...")
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+            json=openai_payload,
+            timeout=20
+        )
+        response.raise_for_status()
+        
+        data = response.json()
+        content = data['choices'][0]['message']['content']
+        narrative_data = json.loads(content)
+        
+        normalized = {
+            'narrative': narrative_data.get('narrative', ''),
+            'image_prompt': narrative_data.get('image_prompt', ''),
+            'summary_point': narrative_data.get('summary_point', '')
+        }
+        
+        return jsonify({
+            'candidates': [{'content': {'parts': [{'text': json.dumps(normalized)}]}}],
+            'normalized_candidate': normalized,
+            'used_real_llm': True
+        }), 200
+        
+    except Exception as e:
+        print(f"[OPENAI ERROR] {str(e)}")
+        return jsonify({'error': f'OpenAI API error: {str(e)}'}), 500
+
+
+def _call_anthropic_llm(payload):
+    """Call Anthropic Claude API."""
+    try:
+        from flask import current_app, jsonify
+        
+        ANTHROPIC_API_KEY = current_app.config.get('ANTHROPIC_API_KEY')
+        if not ANTHROPIC_API_KEY:
+            return jsonify({'error': 'ANTHROPIC_API_KEY not configured'}), 500
+        
+        user_prompt = _extract_user_prompt(payload)
+        system_instruction = payload.get('systemInstruction', {}).get('parts', [{}])[0].get('text', '')
+        
+        # Add JSON format instruction to the prompt
+        enhanced_prompt = f"{user_prompt}\n\nRespond with ONLY a JSON object with these fields: narrative, image_prompt, summary_point"
+        
+        anthropic_payload = {
+            "model": "claude-3-haiku-20240307",  # Fast, cheap model
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user", "content": enhanced_prompt}
+            ],
+            "system": system_instruction or "You are a creative storyteller."
+        }
+        
+        print(f"[ANTHROPIC] Calling Anthropic API...")
+        response = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json"
+            },
+            json=anthropic_payload,
+            timeout=20
+        )
+        response.raise_for_status()
+        
+        data = response.json()
+        content = data['content'][0]['text']
+        
+        # Try to parse JSON from response
+        try:
+            narrative_data = json.loads(content)
+        except:
+            # If not JSON, extract from text
+            narrative_data = {'narrative': content, 'image_prompt': content[:200], 'summary_point': content[:100]}
+        
+        normalized = {
+            'narrative': narrative_data.get('narrative', ''),
+            'image_prompt': narrative_data.get('image_prompt', ''),
+            'summary_point': narrative_data.get('summary_point', '')
+        }
+        
+        return jsonify({
+            'candidates': [{'content': {'parts': [{'text': json.dumps(normalized)}]}}],
+            'normalized_candidate': normalized,
+            'used_real_llm': True
+        }), 200
+        
+    except Exception as e:
+        print(f"[ANTHROPIC ERROR] {str(e)}")
+        return jsonify({'error': f'Anthropic API error: {str(e)}'}), 500
+
+
 # --- AI ROUTING ENDPOINTS (Protected) ---
 
 @ai_bp.route('/generate-prompt', methods=['POST'])
@@ -178,6 +408,7 @@ def generate_prompt(user_id):
             pass
         # Support a dev mock LLM provider to return deterministic JSON for local testing
         provider = current_app.config.get('LLM_PROVIDER', 'gemini')
+        print(f"[LLM] Using provider: {provider}")
 
         if provider == 'mock':
             # Try to derive a short prompt text from the payload for better mock outputs
@@ -233,23 +464,47 @@ def generate_prompt(user_id):
                 pass
             return jsonify(mock_body), 200
 
+        # --- Handle alternative LLM providers ---
+        if provider == 'groq':
+            return _call_groq_llm(payload)
+        elif provider == 'openai':
+            return _call_openai_llm(payload)
+        elif provider == 'anthropic':
+            return _call_anthropic_llm(payload)
+
+        # Default: Gemini
         GEMINI_API_KEY = current_app.config['GEMINI_API_KEY']
         STORY_API_URL = current_app.config['STORY_API_URL']
 
-        # Route to external Gemini API. If it fails for any reason (network,
-        # provider error, billing, etc.) we fall back to the mock LLM so the
-        # frontend receives a usable response instead of an error.
+        # Route to external Gemini API. FORCED to use real LLM - NO fallback.
+        # Log all requests and responses for debugging.
+        print(f"[LLM FORCE] Attempting to call real Gemini API with key: {GEMINI_API_KEY[:20]}...")
+        print(f"[LLM FORCE] Story API URL: {STORY_API_URL}")
         try:
             response = None
-            for attempt in range(3):
-                try:
-                    response = requests.post(f"{STORY_API_URL}?key={GEMINI_API_KEY}", json=payload, timeout=60)
-                    response.raise_for_status()
-                    break
-                except requests.exceptions.RequestException:
-                    if attempt == 2:
-                        raise
-                    time.sleep(2 ** attempt)
+            session = _get_session()
+            # AGGRESSIVE timeout - fail fast if API is slow
+            timeout_secs = 8  # Ultra-aggressive 8 second timeout
+            print(f"[LLM FORCE] Attempting to call real Gemini API with timeout={timeout_secs}s")
+            try:
+                print(f"[LLM FORCE] POST to {STORY_API_URL}")
+                response = session.post(
+                    f"{STORY_API_URL}?key={GEMINI_API_KEY}", 
+                    json=payload, 
+                    timeout=timeout_secs
+                )
+                print(f"[LLM FORCE] Response status: {response.status_code}")
+                response.raise_for_status()
+                print(f"[LLM FORCE] SUCCESS! Got response")
+            except requests.exceptions.Timeout as e:
+                print(f"[LLM FORCE] TIMEOUT ERROR after {timeout_secs}s: {str(e)}")
+                raise Exception(f"Gemini API timeout after {timeout_secs}s - API is not responding in time")
+            except requests.exceptions.ConnectionError as e:
+                print(f"[LLM FORCE] CONNECTION ERROR: {str(e)}")
+                raise Exception(f"Cannot connect to Gemini API: {str(e)}")
+            except requests.exceptions.RequestException as e:
+                print(f"[LLM FORCE] REQUEST ERROR: {str(e)}")
+                raise
             if response is None:
                 raise Exception('No response from upstream LLM provider')
             # Post-process the LLM response to ensure we always return a JSON
@@ -388,71 +643,16 @@ def generate_prompt(user_id):
 
             return jsonify(resp_json), 200
         except Exception as upstream_err:
-            # Log upstream error on server side (print for now). Always fall
-            # back to a deterministic mock response so the frontend can
-            # continue working and an image can still be generated from the
-            # synthesized visual prompt. This makes the app resilient during
-            # network/provider outages and matches the user's expectation of
-            # always producing a prompt+image.
+            # Log upstream error on server side (print for now).
             try:
-                print('LLM provider error, falling back to mock LLM:', str(upstream_err))
+                print('[LLM FORCE ERROR] LLM provider error:', str(upstream_err))
+                print('[LLM FORCE ERROR] Full error details:', repr(upstream_err))
             except Exception:
                 pass
-
-            # Build a simple mock body (same format used by LLM_PROVIDER='mock')
-            try:
-                prompt_text = ''
-                if isinstance(payload, dict):
-                    contents = payload.get('contents') or payload.get('messages')
-                    if contents and isinstance(contents, list) and len(contents) > 0:
-                        first = contents[0]
-                        if isinstance(first, dict):
-                            parts = first.get('parts') or []
-                            if parts and isinstance(parts, list) and len(parts) > 0:
-                                first_part = parts[0]
-                                if isinstance(first_part, dict):
-                                    prompt_text = first_part.get('text','')
-                                else:
-                                    prompt_text = str(first_part)
-                            else:
-                                prompt_text = first.get('text','') or ''
-                        else:
-                            prompt_text = str(first)
-            except Exception:
-                prompt_text = str(payload)
-
-            # Synthesize a richer fallback narrative when upstream LLM fails
-            narrative = _synthesize_narrative(prompt_text, paragraphs=4)
-            image_prompt = f"{prompt_text[:160]} -- photorealistic cinematic"
-            summary_point = narrative.split('\n')[0][:160]
-
-            mock_body = {
-                'candidates': [
-                    {
-                        'content': {
-                            'parts': [
-                                { 'text': json.dumps({
-                                    'narrative': narrative,
-                                    'image_prompt': image_prompt,
-                                    'summary_point': summary_point
-                                }) }
-                            ]
-                        }
-                    }
-                ]
-            }
-            # Also expose normalized_candidate for client robustness and
-            # indicate that this is a fallback (not generated by a real LLM)
-            try:
-                mock_body['normalized_candidate'] = {
-                    'narrative': narrative,
-                    'image_prompt': image_prompt,
-                    'summary_point': summary_point
-                }
-                mock_body['used_real_llm'] = False
-            except Exception:
-                pass
-            return jsonify(mock_body), 200
+            
+            # FORCE real LLM - NEVER fall back to mock. Always return error.
+            print('[LLM FORCE] ABORTING - Mock fallback is disabled. Real LLM is required.')
+            return jsonify({'error': str(upstream_err), 'message': 'LLM provider failed. Real LLM is required.'}), 500
             
 
     except requests.exceptions.HTTPError as e:
@@ -470,6 +670,10 @@ def generate_image(user_id):
         data = request.get_json()
         payload = data['payload']
 
+        print(f"\n[IMAGE] ========== IMAGE GENERATION START ==========")
+        print(f"[IMAGE] User: {user_id}")
+        print(f"[IMAGE] Payload keys: {list(payload.keys())}")
+
         GEMINI_API_KEY = current_app.config.get('GEMINI_API_KEY')
         IMAGE_API_URL = current_app.config.get('IMAGE_API_URL')
 
@@ -480,9 +684,13 @@ def generate_image(user_id):
         # same image.
         provider = current_app.config.get('IMAGE_PROVIDER', 'google')
         alternate_url = current_app.config.get('ALTERNATE_IMAGE_API_URL')
+        
+        print(f"[IMAGE] Provider: {provider}")
+        print(f"[IMAGE] Stability API Key configured: {bool(current_app.config.get('STABILITY_API_KEY'))}")
 
         # Determine prompt and requested sample count for caching
         prompt_text = _extract_prompt_from_payload(payload)
+        print(f"[IMAGE] Extracted prompt ({len(prompt_text)} chars): {prompt_text[:100]}...")
         params = {}
         try:
             params_obj = payload.get('parameters') if isinstance(payload, dict) else {}
@@ -556,6 +764,10 @@ def generate_image(user_id):
             except Exception:
                 prompt_text = str(payload)
 
+            print(f"[STABILITY] Calling Stability AI...")
+            print(f"[STABILITY] Engine: {engine}")
+            print(f"[STABILITY] Prompt ({len(prompt_text)} chars): {prompt_text[:150]}...")
+
             stability_url = f'https://api.stability.ai/v1/generation/{engine}/text-to-image'
             headers = {'Authorization': f'Bearer {stability_key}', 'Content-Type': 'application/json'}
             body = {
@@ -569,14 +781,41 @@ def generate_image(user_id):
                 # if params requested sampleCount override, use it
                 if params.get('sampleCount'):
                     body['samples'] = int(params.get('sampleCount') or 1)
+                print(f"[STABILITY] POST to {stability_url}")
                 st_resp = requests.post(stability_url, headers=headers, json=body, timeout=60)
+                print(f"[STABILITY] Response status: {st_resp.status_code}")
                 st_resp.raise_for_status()
-            except requests.exceptions.HTTPError:
+                print(f"[STABILITY] SUCCESS!")
+            except requests.exceptions.HTTPError as e:
+                # If Stability returns an API error and fallbacks are enabled, provide Picsum
+                print(f"[STABILITY] HTTP Error: {st_resp.status_code}")
+                print(f"[STABILITY] Response: {st_resp.text[:200]}")
+                if current_app.config.get('USE_IMAGE_FALLBACK', True):
+                    print(f"[STABILITY] Falling back to Picsum...")
+                    b64 = _picsum_base64_from_prompt(prompt_text)
+                    if b64:
+                        try:
+                            _persist_image_cache(cache_key, [b64], prompt_text)
+                        except Exception:
+                            pass
+                        print(f"[STABILITY] Returned Picsum fallback image")
+                        return jsonify({'predictions': [{'bytesBase64Encoded': b64}], 'fallback': 'picsum'}), 200
                 try:
                     return jsonify({'error': st_resp.json()}), st_resp.status_code
                 except Exception:
                     return jsonify({'error': 'Stability API Error'}), 502
             except Exception as e:
+                print(f"[STABILITY] Exception: {str(e)}")
+                if current_app.config.get('USE_IMAGE_FALLBACK', True):
+                    print(f"[STABILITY] Falling back to Picsum due to exception...")
+                    b64 = _picsum_base64_from_prompt(prompt_text)
+                    if b64:
+                        try:
+                            _persist_image_cache(cache_key, [b64], prompt_text)
+                        except Exception:
+                            pass
+                        print(f"[STABILITY] Returned Picsum fallback image")
+                        return jsonify({'predictions': [{'bytesBase64Encoded': b64}], 'fallback': 'picsum'}), 200
                 return jsonify({'error': f'Stability provider request failed: {str(e)}'}), 502
 
             # Parse common response shapes for base64 images
@@ -598,6 +837,14 @@ def generate_image(user_id):
                             b64 = d0
 
                 if not b64:
+                    if current_app.config.get('USE_IMAGE_FALLBACK', True):
+                        fb = _picsum_base64_from_prompt(prompt_text)
+                        if fb:
+                            try:
+                                _persist_image_cache(cache_key, [fb], prompt_text)
+                            except Exception:
+                                pass
+                            return jsonify({'predictions': [{'bytesBase64Encoded': fb}], 'fallback': 'picsum'}), 200
                     return jsonify({'error': 'No image returned by Stability API.'}), 502
 
                 # persist to cache
@@ -608,6 +855,14 @@ def generate_image(user_id):
 
                 return jsonify({'predictions': [{'bytesBase64Encoded': b64}]}), 200
             except Exception as e:
+                if current_app.config.get('USE_IMAGE_FALLBACK', True):
+                    fb = _picsum_base64_from_prompt(prompt_text)
+                    if fb:
+                        try:
+                            _persist_image_cache(cache_key, [fb], prompt_text)
+                        except Exception:
+                            pass
+                        return jsonify({'predictions': [{'bytesBase64Encoded': fb}], 'fallback': 'picsum'}), 200
                 return jsonify({'error': f'Error parsing Stability response: {str(e)}'}), 500
 
         if provider == 'local_auto':
@@ -1030,10 +1285,9 @@ def generate_preview(user_id):
 
 
 def _async_generate_and_cache(job_id, payload, user_id, app_obj=None):
-    """Background worker that generates a deterministic high-res Picsum image
-    for the given payload and persists it to the image cache. This is a
-    lightweight stand-in for a full provider-backed background job and
-    allows the UI to poll for completion via the job endpoints.
+    """Background worker that generates an AI image using Stability API
+    or falls back to Picsum. This allows the UI to poll for completion
+    via the job endpoints.
     """
     try:
         JOBS[job_id]['status'] = 'running'
@@ -1042,6 +1296,8 @@ def _async_generate_and_cache(job_id, payload, user_id, app_obj=None):
             ctx = app_obj.app_context()
             ctx.push()
         prompt_text = _extract_prompt_from_payload(payload) or 'async'
+        
+        print(f"[IMAGE] Starting async image generation for prompt: {prompt_text[:100]}...")
 
         provider = current_app.config.get('IMAGE_PROVIDER', 'google')
         params = {}
@@ -1058,6 +1314,7 @@ def _async_generate_and_cache(job_id, payload, user_id, app_obj=None):
         cache_ttl = current_app.config.get('IMAGE_CACHE_TTL_SECONDS', 60 * 60 * 24)
         cached = _load_image_cache(cache_key, ttl_seconds=cache_ttl)
         if cached:
+            print(f"[IMAGE] Cache hit for key: {cache_key}")
             # build file urls from persisted files
             uploads_dir = os.path.join(current_app.static_folder, 'uploads')
             meta_path = os.path.join(uploads_dir, f'cache_{cache_key}.json')
@@ -1075,23 +1332,77 @@ def _async_generate_and_cache(job_id, payload, user_id, app_obj=None):
                 ctx.pop()
             return
 
-        # For now, create a deterministic high-res Picsum image as the "full" result
-        try:
-            seed = hashlib.sha1(prompt_text.encode('utf-8')).hexdigest()[:8]
-        except Exception:
-            seed = hashlib.sha1(str(time.time()).encode('utf-8')).hexdigest()[:8]
-        width = 1200
-        height = 675
-        picsum_url = f'https://picsum.photos/seed/{seed}/{width}/{height}'
-        pic_resp = requests.get(picsum_url, timeout=30)
-        if pic_resp.status_code == 200:
-            img_bytes = pic_resp.content
+        # Try Stability AI first
+        img_bytes = None
+        if provider == 'stability':
+            STABILITY_API_KEY = current_app.config.get('STABILITY_API_KEY')
+            STABILITY_ENGINE = current_app.config.get('STABILITY_ENGINE', 'stable-diffusion-xl-1024-v1-0')
+            
+            if STABILITY_API_KEY:
+                print(f"[STABILITY] Calling Stability AI API...")
+                try:
+                    stability_response = requests.post(
+                        f"https://api.stability.ai/v1/generation/{STABILITY_ENGINE}/text-to-image",
+                        headers={
+                            "Content-Type": "application/json",
+                            "Accept": "application/json",
+                            "Authorization": f"Bearer {STABILITY_API_KEY}"
+                        },
+                        json={
+                            "text_prompts": [{"text": prompt_text, "weight": 1.0}],
+                            "cfg_scale": 7,
+                            "height": 1024,
+                            "width": 1024,
+                            "samples": 1,
+                            "steps": 30
+                        },
+                        timeout=60
+                    )
+                    
+                    print(f"[STABILITY] Response status: {stability_response.status_code}")
+                    
+                    if stability_response.status_code == 200:
+                        response_data = stability_response.json()
+                        artifacts = response_data.get('artifacts', [])
+                        if artifacts and 'base64' in artifacts[0]:
+                            img_bytes = base64.b64decode(artifacts[0]['base64'])
+                            print(f"[STABILITY] ✅ SUCCESS! Image generated ({len(img_bytes)} bytes)")
+                        else:
+                            print(f"[STABILITY] ⚠️ No artifacts in response")
+                    else:
+                        error_text = stability_response.text[:200]
+                        print(f"[STABILITY] ❌ API Error: {error_text}")
+                except Exception as e:
+                    print(f"[STABILITY] ❌ Exception: {str(e)}")
+            else:
+                print(f"[STABILITY] ⚠️ STABILITY_API_KEY not configured")
+        
+        # Fallback to Picsum if Stability failed
+        if img_bytes is None:
+            print(f"[IMAGE] Falling back to Picsum...")
+            try:
+                seed = hashlib.sha1(prompt_text.encode('utf-8')).hexdigest()[:8]
+            except Exception:
+                seed = hashlib.sha1(str(time.time()).encode('utf-8')).hexdigest()[:8]
+            width = 1200
+            height = 675
+            picsum_url = f'https://picsum.photos/seed/{seed}/{width}/{height}'
+            pic_resp = requests.get(picsum_url, timeout=30)
+            if pic_resp.status_code == 200:
+                img_bytes = pic_resp.content
+                print(f"[IMAGE] Picsum fallback success ({len(img_bytes)} bytes)")
+            else:
+                print(f"[IMAGE] ❌ Picsum also failed")
+        
+        # If we got an image (from Stability or Picsum), cache it
+        if img_bytes:
             b64 = base64.b64encode(img_bytes).decode('utf-8')
             # persist to cache using existing helper
             try:
                 _persist_image_cache(cache_key, [b64], prompt_text)
-            except Exception:
-                pass
+                print(f"[IMAGE] Cached with key: {cache_key}")
+            except Exception as e:
+                print(f"[IMAGE] Cache persist error: {str(e)}")
 
             # Read back metadata to report files
             uploads_dir = os.path.join(current_app.static_folder, 'uploads')
@@ -1110,12 +1421,14 @@ def _async_generate_and_cache(job_id, payload, user_id, app_obj=None):
                 ctx.pop()
             return
 
-        # If Picsum failed, mark job as error and include message
+        # If everything failed, mark job as error
+        print(f"[IMAGE] ❌ All image generation methods failed")
         JOBS[job_id]['status'] = 'error'
-        JOBS[job_id]['result'] = {'error': 'Failed to fetch preview image for async job.'}
+        JOBS[job_id]['result'] = {'error': 'Failed to generate image from any provider.'}
         if app_obj:
             ctx.pop()
     except Exception as e:
+        print(f"[IMAGE] ❌ Fatal error: {str(e)}")
         JOBS[job_id]['status'] = 'error'
         JOBS[job_id]['result'] = {'error': str(e)}
         if app_obj:
